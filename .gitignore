@@ -8,3 +8,14 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local models and large weights
+models/
+
+# Generated audio artifacts
+*.wav
+*.mp3
+audio_cache/
+
+# Local configuration
+.env
