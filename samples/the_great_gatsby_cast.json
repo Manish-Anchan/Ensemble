@@ -1,0 +1,110 @@
+{
+  "book_title": "The Great Gatsby",
+  "characters": {
+    "narrator": {
+      "id": "narrator",
+      "name": "Nick Carraway",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "narrator",
+      "personality_traits": [
+        "literary",
+        "measured",
+        "observant",
+        "reflective",
+        "reserved",
+        "tolerant"
+      ],
+      "aliases": [
+        "Carraway",
+        "Nick",
+        "narrator"
+      ],
+      "voice_id": "am_michael",
+      "voice_rationale": "Steady, warm, and articulate American voice fits the thoughtful, middle-class narrator who observes with a mix of judgment and tolerance."
+    },
+    "char_gatsby": {
+      "id": "char_gatsby",
+      "name": "Jay Gatsby",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "protagonist",
+      "personality_traits": [
+        "charming",
+        "enigmatic",
+        "gorgeous",
+        "hopeful",
+        "mysterious",
+        "romantic",
+        "wealthy"
+      ],
+      "aliases": [
+        "Gatsby",
+        "Mr. Gatsby"
+      ],
+      "voice_id": "am_echo",
+      "voice_rationale": "Smooth, cool, and charming mid-tone captures the 'gorgeous' and heightened sensitivity of Gatsby, distinct from the narrator's steadiness."
+    },
+    "char_father": {
+      "id": "char_father",
+      "name": "Nick's Father",
+      "gender": "male",
+      "age_group": "elderly",
+      "role": "supporting",
+      "personality_traits": [
+        "cautious",
+        "communicative",
+        "reserved",
+        "snobbish",
+        "traditional",
+        "wise"
+      ],
+      "aliases": [
+        "Dad",
+        "Father"
+      ],
+      "voice_id": "am_santa",
+      "voice_rationale": "Warm, hearty, and aged resonant voice suits the wise, middle-western patriarch offering life advice."
+    },
+    "char_tom": {
+      "id": "char_tom",
+      "name": "Tom Buchanan",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "antagonist",
+      "personality_traits": [
+        "arrogant",
+        "aggressive",
+        "physically imposing",
+        "contemptuous"
+      ],
+      "aliases": [
+        "Tom",
+        "Buchanan",
+        "Mr. Buchanan"
+      ],
+      "voice_id": "am_adam",
+      "voice_rationale": "Deep, authoritative, and slightly gruff voice matches the description of Tom's 'gruff husky tenor' and his aggressive, dominant demeanor."
+    },
+    "char_daisy": {
+      "id": "char_daisy",
+      "name": "Daisy Buchanan",
+      "gender": "female",
+      "age_group": "adult",
+      "role": "supporting",
+      "personality_traits": [
+        "elegant",
+        "melancholic",
+        "superficial",
+        "wistful"
+      ],
+      "aliases": [
+        "Daisy",
+        "Mrs. Buchanan"
+      ],
+      "voice_id": "af_nicole",
+      "voice_rationale": "Gentle, breathy, and thoughtful voice captures Daisy's romantic vulnerability and the 'wistfulness' described in the narrative."
+    }
+  },
+  "narrator_id": "narrator"
+}
