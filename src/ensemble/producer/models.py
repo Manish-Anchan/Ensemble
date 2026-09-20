@@ -34,6 +34,11 @@ class CastSheet:
     def get_narrator(self) -> Optional[CharacterProfile]:
         return self.characters.get(self.narrator_id)
 
+    @property
+    def default_narrator_voice(self) -> str:
+        narrator = self.get_narrator()
+        return narrator.voice_id if narrator and narrator.voice_id else "bm_george"
+
     def get_character_for_speaker(self, speaker_name: str) -> Optional[CharacterProfile]:
         """
         Resolves a raw speaker tag from the Scene Director (e.g. 'mr. gatsby', 'gatsby', 'tom')

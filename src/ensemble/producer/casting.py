@@ -31,13 +31,13 @@ class CastingProducer:
         base_url: Optional[str] = None,
         narrator_voice: Optional[str] = None,
     ):
-        self.model = model or os.getenv("PRODUCER_MODEL", os.getenv("DIRECTOR_MODEL", "qwen/qwen3.8-27b"))
-        self.api_key = api_key or os.getenv("LLM_API_KEY", os.getenv("GROQ_API_KEY"))
-        self.base_url = base_url or os.getenv("LLM_BASE_URL", os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"))
+        self.model = model or os.getenv("PRODUCER_MODEL", "qwen/qwen3.8-27b")
+        self.api_key = api_key or os.getenv("PRODUCER_API_KEY", os.getenv("LLM_API_KEY", os.getenv("GROQ_API_KEY")))
+        self.base_url = base_url or os.getenv("PRODUCER_BASE_URL", os.getenv("LLM_BASE_URL", os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")))
         self.default_narrator_voice = narrator_voice or "bm_george"
 
         if not self.api_key:
-            raise ValueError("LLM_API_KEY is not set. Please provide it in .env or pass to CastingProducer.")
+            raise ValueError("PRODUCER_API_KEY or GROQ_API_KEY is not set. Please provide it in .env or pass to CastingProducer.")
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 

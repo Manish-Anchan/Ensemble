@@ -16,6 +16,7 @@ models/
 *.wav
 *.mp3
 audio_cache/
+outputs/
 
 # Local configuration
 .env
