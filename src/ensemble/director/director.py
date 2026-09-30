@@ -88,7 +88,7 @@ RULES:
 1. IDENTIFY ALL LINES:
    - Split the scene prose into sequential units: dialogue lines and narrative descriptive blocks.
    - For narrative blocks, set speaker to "narrator".
-   - For spoken dialogue, set speaker to the exact character ID from the cast list above (e.g. "char_tom", "char_daisy", "char_jordan").
+   - For spoken dialogue, set speaker to the exact character ID from the cast list above (e.g. "char_firstname").
 
 2. STRICT DIALOGUE PURITY (STRIP AUTHOR TAGS):
    - Dialogue lines MUST contain spoken words only. Strip all author tags, speech verbs, and attribution clauses.
@@ -103,7 +103,7 @@ RULES:
    - pause_after_ms: integer milliseconds of silence to follow the line (350-450ms for dialogue exchanges; 550-700ms after narrative descriptions or scene beats).
 
 4. DYNAMIC UNREGISTERED CHARACTERS:
-   - If a character speaks who is NOT in the registered cast, use a slug like "char_catherine" as speaker, and list them in the "new_characters" array with their name, gender ("male"|"female"), and personality_traits.
+   - If a character speaks who is NOT in the registered cast, use a slug like "char_speakername" as speaker, and list them in the "new_characters" array with their name, gender ("male"|"female"), and personality_traits.
 
 5. RESPONSE FORMAT:
    Return ONLY a valid JSON object matching this schema:
@@ -247,6 +247,40 @@ RULES:
                     pause_after_ms=pause_after_ms,
                 )
             )
+
+        # Defensive Auto-Cast Safeguard: ensure every spoken character is registered with a distinct voice
+        if cast_sheet:
+            used_voices = {c.voice_id for c in cast_sheet.characters.values()}
+            for spl in screenplay_lines:
+                spk = spl.speaker
+                if spk != "narrator" and spk not in cast_sheet.characters:
+                    clean_name = spk.replace("char_", "").replace("_", " ").title()
+
+                    fem_hints = ["miss", "mrs", "ms", "lady", "girl", "woman", "daisy", "jordan", "baker", "catherine", "myrtle", "madam"]
+                    is_female = any(h in spk.lower() for h in fem_hints)
+                    if not is_female and isinstance(prose_text, str):
+                        clean_lower = clean_name.lower()
+                        if re.search(rf"\b(she|her)\b[^.]*\b{re.escape(clean_lower)}\b", prose_text, re.IGNORECASE) or \
+                           re.search(rf"\b{re.escape(clean_lower)}\b[^.]*\b(she|her)\b", prose_text, re.IGNORECASE):
+                            is_female = True
+
+                    gender = "female" if is_female else "male"
+                    voice_id = self._pick_unused_voice(gender, used_voices, cast_sheet.default_narrator_voice)
+                    used_voices.add(voice_id)
+
+                    profile = CharacterProfile(
+                        id=spk,
+                        name=clean_name,
+                        gender=gender,
+                        age_group="adult",
+                        role="supporting",
+                        personality_traits=["discovered_speaker"],
+                        aliases=[clean_name],
+                        voice_id=voice_id,
+                        voice_rationale=f"Defensively auto-cast during Scene {s_idx} direction."
+                    )
+                    cast_sheet.characters[spk] = profile
+                    print(f"   🎭 Auto-Cast Safeguard: Discovered unregistered speaker '{clean_name}' ({gender}) in Scene {s_idx} -> Assigned voice '{voice_id}'")
 
         screenplay = Screenplay(
             chapter_index=ch_idx,

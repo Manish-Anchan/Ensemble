@@ -104,6 +104,27 @@
       ],
       "voice_id": "af_nicole",
       "voice_rationale": "Gentle, breathy, and thoughtful voice captures Daisy's romantic vulnerability and the 'wistfulness' described in the narrative."
+    },
+    "char_jordan": {
+      "id": "char_jordan",
+      "name": "Jordan Baker",
+      "gender": "female",
+      "age_group": "adult",
+      "role": "supporting",
+      "personality_traits": [
+        "athletic",
+        "cynical",
+        "aloof",
+        "slender",
+        "bored"
+      ],
+      "aliases": [
+        "Jordan",
+        "Miss Baker",
+        "Baker"
+      ],
+      "voice_id": "af_bella",
+      "voice_rationale": "Crisp, athletic, and slightly detached modern American female voice fits the cynical professional golfer."
     }
   },
   "narrator_id": "narrator"

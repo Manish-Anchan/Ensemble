@@ -140,3 +140,66 @@ def test_scene_director_mock(monkeypatch):
     assert catherine.gender == "female"
     assert catherine.voice_id != "am_michael"  # Distinct from existing voices
     assert catherine.voice_id != "am_adam"
+
+
+def test_defensive_autocast_safeguard(monkeypatch):
+    """Verifies that unregistered speakers in lines are auto-cast even if LLM omits new_characters."""
+    director = SceneDirector(api_key="mock-key")
+
+    # LLM outputs speaker "char_miss_jordan", but FORGETS new_characters list!
+    mock_llm_response = {
+        "lines": [
+            {
+                "speaker": "narrator",
+                "emotion": "measured",
+                "text": "Nick looked over.",
+                "speed": 1.0,
+                "pause_after_ms": 500,
+            },
+            {
+                "speaker": "char_jordan",
+                "emotion": "abrupt",
+                "text": "Absolutely!",
+                "speed": 1.0,
+                "pause_after_ms": 400,
+            },
+        ],
+        "new_characters": []  # Empty!
+    }
+
+    monkeypatch.setattr(
+        director,
+        "_call_with_retry",
+        lambda messages: type(
+            "MockResp",
+            (),
+            {
+                "choices": [
+                    type("Choice", (), {"message": type("Msg", (), {"content": json.dumps(mock_llm_response)})()})()
+                ]
+            },
+        )(),
+    )
+
+    cast_sheet = CastSheet(
+        book_title="Test Book",
+        characters={
+            "narrator": CharacterProfile(
+                id="narrator", name="Narrator", gender="male", age_group="adult",
+                role="narrator", personality_traits=[], aliases=[], voice_id="am_michael"
+            )
+        }
+    )
+
+    screenplay, updated_cast = director.direct_scene(
+        scene="Miss Jordan said Absolutely with suddenness.",
+        cast_sheet=cast_sheet,
+        chapter_index=1,
+        scene_index=1,
+    )
+
+    assert "char_jordan" in updated_cast.characters
+    jordan = updated_cast.characters["char_jordan"]
+    assert jordan.gender == "female"
+    assert jordan.voice_id.startswith("af_")  # Assigned a female voice
+    assert jordan.voice_id != "am_michael"     # Did not fall back to male narrator!
