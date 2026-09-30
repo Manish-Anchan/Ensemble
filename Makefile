@@ -9,9 +9,9 @@ BOOK    ?= samples/the_great_gatsby.pdf
 CHAPTER ?= 1
 SCENES  ?= 0
 START   ?= 1
-END     ?= 9
+FORMAT  ?= wav
 
-.PHONY: help test test-v play play-scene produce-ch produce-all produce-range script-ch script-all cast clean-cache status
+.PHONY: help test test-v play play-scene produce-ch produce-mp3 produce-all produce-all-mp3 produce-range script-ch script-all cast clean-cache status
 
 # ------------------------------------------------------------------------------
 # Default Target: Help Menu
@@ -23,8 +23,10 @@ help:
 	@echo "Quick Start Commands:"
 	@echo "  make play              Stream Chapter 1 live to speakers (or CHAPTER=X)"
 	@echo "  make play-scene        Stream 1 scene for quick verification"
-	@echo "  make produce-ch        Produce Chapter 1 audio to WAV (or CHAPTER=X)"
-	@echo "  make produce-all       Produce ALL chapters in batch mode (resumable)"
+	@echo "  make produce-ch        Produce Chapter 1 audio (WAV, or CHAPTER=X)"
+	@echo "  make produce-mp3       Produce Chapter 1 audio in MP3 format"
+	@echo "  make produce-all       Produce ALL chapters in batch mode (WAV, resumable)"
+	@echo "  make produce-all-mp3   Produce ALL chapters in batch mode in MP3 format"
 	@echo "  make produce-range     Produce chapter slice (e.g. START=1 END=3)"
 	@echo ""
 	@echo "Screenplay & Casting Commands:"
@@ -41,6 +43,7 @@ help:
 	@echo "Custom Parameters:"
 	@echo "  make play CHAPTER=2 BOOK=samples/other.pdf"
 	@echo "  make produce-range START=2 END=4"
+	@echo "  make produce-all FORMAT=mp3"
 	@echo "======================================================================"
 
 # ------------------------------------------------------------------------------
@@ -56,10 +59,16 @@ play-scene:
 # Production & Audio Generation
 # ------------------------------------------------------------------------------
 produce-ch:
-	$(PYTHON) -m ensemble.drama $(BOOK) --chapter $(CHAPTER)
+	$(PYTHON) -m ensemble.drama $(BOOK) --chapter $(CHAPTER) --format $(FORMAT)
+
+produce-mp3:
+	$(PYTHON) -m ensemble.drama $(BOOK) --chapter $(CHAPTER) --mp3
 
 produce-all:
-	$(PYTHON) -m ensemble.drama $(BOOK) --all
+	$(PYTHON) -m ensemble.drama $(BOOK) --all --format $(FORMAT)
+
+produce-all-mp3:
+	$(PYTHON) -m ensemble.drama $(BOOK) --all --mp3
 
 produce-range:
 	$(PYTHON) -m ensemble.drama $(BOOK) --all --start-chapter $(START) --end-chapter $(END)

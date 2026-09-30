@@ -63,7 +63,18 @@ def main():
         "--output",
         type=str,
         default=None,
-        help="Path to output audio WAV file (single-chapter mode) or output directory (batch mode)",
+        help="Path to output audio WAV/MP3 file (single-chapter mode) or output directory (batch mode)",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["wav", "mp3"],
+        default="wav",
+        help="Audio output format (wav or mp3, default: wav)",
+    )
+    parser.add_argument(
+        "--mp3",
+        action="store_true",
+        help="Shortcut to export audio in MP3 format instead of WAV",
     )
     parser.add_argument(
         "--footer-margin",
@@ -130,6 +141,7 @@ def main():
         )
 
     pipeline = DramaPipeline()
+    audio_format = "mp3" if args.mp3 or args.format == "mp3" else "wav"
 
     player = None
     on_line_stream = None
@@ -195,6 +207,7 @@ def main():
                 end_chapter=end_ch,
                 max_scenes_per_chapter=args.scenes,
                 script_only=args.script_only,
+                audio_format=audio_format,
                 on_chapter_start=on_batch_chapter_start,
                 on_chapter_done=on_batch_chapter_done,
                 on_scene_start=on_scene_start,
@@ -310,6 +323,7 @@ def main():
             cast_sheet=cast_sheet,
             book_title=book.title,
             max_scenes=args.scenes,
+            audio_format=audio_format,
             on_scene_start=on_scene_start,
             on_line_stream=on_line_stream,
             on_scene_done=on_scene_done,
@@ -336,8 +350,8 @@ def main():
 
     out_dir = Path("outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = Path(args.output) if args.output else out_dir / f"{path.stem}_ch{target_ch_num}.wav"
-    pipeline.synthesizer.export_audio(chapter_audio, out_file)
+    out_file = Path(args.output) if args.output else out_dir / f"{path.stem}_ch{target_ch_num}.{audio_format}"
+    pipeline.synthesizer.export_audio(chapter_audio, out_file, format=audio_format)
 
     print("\n" + "=" * 70)
     print("✨ AUDIO DRAMA PRODUCTION COMPLETE!")

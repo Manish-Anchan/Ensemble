@@ -68,6 +68,7 @@ class DramaPipeline:
         book_title: str,
         max_scenes: Optional[int] = None,
         output_dir: Optional[Path] = None,
+        audio_format: str = "wav",
         on_scene_start: Optional[Callable[[SceneChunk, int, int], None]] = None,
         on_line_stream: Optional[Callable[[int, int, ScreenplayLine, str, AudioSegment], None]] = None,
         on_scene_done: Optional[Callable[[SceneChunk, Screenplay, AudioSegment, float], None]] = None,
@@ -83,6 +84,7 @@ class DramaPipeline:
         scene_transition_pause = AudioSegment.silent(duration=1000)  # 1s pause between dramatic scenes
         current_cast = cast_sheet
         total_scenes = len(scenes_to_run)
+        fmt = "mp3" if audio_format.lower() == "mp3" else "wav"
 
         for s_idx, scene in enumerate(scenes_to_run, 1):
             if on_scene_start:
@@ -99,8 +101,8 @@ class DramaPipeline:
 
             # Optionally cache individual scene audio
             if output_dir:
-                scene_file = output_dir / f"ch{chapter.index}_scene{scene.scene_index}.wav"
-                self.synthesizer.export_audio(scene_audio, scene_file)
+                scene_file = output_dir / f"ch{chapter.index}_scene{scene.scene_index}.{fmt}"
+                self.synthesizer.export_audio(scene_audio, scene_file, format=fmt)
 
             combined_chapter_audio += scene_audio
             if s_idx < total_scenes:
@@ -121,6 +123,7 @@ class DramaPipeline:
         end_chapter: Optional[int] = None,
         max_scenes_per_chapter: Optional[int] = None,
         script_only: bool = False,
+        audio_format: str = "wav",
         on_chapter_start: Optional[Callable[[Chapter, int, int], None]] = None,
         on_chapter_done: Optional[Callable[[Chapter, Path, float, float, bool], None]] = None,
         on_scene_start: Optional[Callable[[SceneChunk, int, int], None]] = None,
@@ -129,11 +132,12 @@ class DramaPipeline:
     ) -> tuple[Dict[int, Path], CastSheet, Dict[str, Any]]:
         """
         Produces an entire novel chapter-by-chapter in batch mode.
-        Saves individual chapter tracks (Chapter_01.wav), screenplays, and a master production manifest.
+        Saves individual chapter tracks (Chapter_01.wav or Chapter_01.mp3), screenplays, and a master production manifest.
         Supports resume mode to skip already-produced chapters.
         """
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
+        fmt = "mp3" if audio_format.lower() == "mp3" else "wav"
 
         target_chapters = [
             ch for ch in book.chapters
@@ -147,6 +151,7 @@ class DramaPipeline:
         manifest: Dict[str, Any] = {
             "book_title": book.title,
             "author": book.author or "Unknown",
+            "audio_format": fmt,
             "total_book_chapters": len(book.chapters),
             "target_chapters": [ch.index for ch in target_chapters],
             "chapters": [],
@@ -157,14 +162,18 @@ class DramaPipeline:
 
         for idx, chapter in enumerate(target_chapters, 1):
             ch_num = chapter.index
-            chapter_audio_file = out_path / f"Chapter_{ch_num:02d}.wav"
+            chapter_audio_file = out_path / f"Chapter_{ch_num:02d}.{fmt}"
             chapter_script_file = out_path / f"Chapter_{ch_num:02d}_screenplay.json"
 
             # Check if this chapter was already produced when resume is enabled
             if resume and not script_only and chapter_audio_file.exists() and chapter_audio_file.stat().st_size > 1000:
-                # Estimate audio duration from 24kHz 16-bit mono PCM (48,000 bytes/sec)
-                file_bytes = max(0, chapter_audio_file.stat().st_size - 44)
-                est_dur_sec = file_bytes / 48000.0
+                if fmt == "mp3":
+                    # MP3 ~128kbps = 16,000 bytes/sec estimate
+                    est_dur_sec = chapter_audio_file.stat().st_size / 16000.0
+                else:
+                    # Estimate audio duration from 24kHz 16-bit mono PCM (48,000 bytes/sec)
+                    file_bytes = max(0, chapter_audio_file.stat().st_size - 44)
+                    est_dur_sec = file_bytes / 48000.0
 
                 chapter_files[ch_num] = chapter_audio_file
                 manifest["chapters"].append({
@@ -240,6 +249,7 @@ class DramaPipeline:
                     cast_sheet=current_cast,
                     book_title=book.title,
                     max_scenes=max_scenes_per_chapter,
+                    audio_format=fmt,
                     on_scene_start=on_scene_start,
                     on_line_stream=on_line_stream,
                     on_scene_done=collect_scene_screenplay,
@@ -248,7 +258,7 @@ class DramaPipeline:
                 dur_sec = len(chapter_audio) / 1000.0
 
                 # Export chapter audio
-                self.synthesizer.export_audio(chapter_audio, chapter_audio_file)
+                self.synthesizer.export_audio(chapter_audio, chapter_audio_file, format=fmt)
 
                 # Export chapter screenplays
                 if chapter_screenplays:
