@@ -11,7 +11,9 @@ SCENES  ?= 0
 START   ?= 1
 FORMAT  ?= wav
 
-.PHONY: help test test-v play play-scene produce-ch produce-mp3 produce-all produce-all-mp3 produce-range script-ch script-all cast clean-cache status
+PORT    ?= 8080
+
+.PHONY: help test test-v play play-scene produce-ch produce-mp3 produce-all produce-all-mp3 produce-range script-ch script-all cast clean-cache status web
 
 # ------------------------------------------------------------------------------
 # Default Target: Help Menu
@@ -21,6 +23,7 @@ help:
 	@echo "🎭 ENSEMBLE: Drama Engine Command Center"
 	@echo "======================================================================"
 	@echo "Quick Start Commands:"
+	@echo "  make web               Launch Web Studio & Live Streaming Player (port 8000)"
 	@echo "  make play              Stream Chapter 1 live to speakers (or CHAPTER=X)"
 	@echo "  make play-scene        Stream 1 scene for quick verification"
 	@echo "  make produce-ch        Produce Chapter 1 audio (WAV, or CHAPTER=X)"
@@ -45,6 +48,12 @@ help:
 	@echo "  make produce-range START=2 END=4"
 	@echo "  make produce-all FORMAT=mp3"
 	@echo "======================================================================"
+
+# ------------------------------------------------------------------------------
+# Web Studio & Live Streaming Player (FastAPI + Modern Web Audio UI)
+# ------------------------------------------------------------------------------
+web:
+	$(PYTHON) -m ensemble.web --port $(PORT)
 
 # ------------------------------------------------------------------------------
 # Live Streaming Playback (Jitter Buffer -> Speakers)

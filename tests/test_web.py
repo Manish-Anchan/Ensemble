@@ -1,0 +1,164 @@
+import pytest
+from pathlib import Path
+from unittest.mock import MagicMock
+from fastapi.testclient import TestClient
+from pydub import AudioSegment
+
+from ensemble.web.app import app
+import ensemble.web.app as web_app
+from ensemble.director.models import Screenplay, ScreenplayLine
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+
+def test_index_page(client):
+    """Verifies that the Studio UI landing page loads with valid HTML."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "ENSEMBLE" in response.text
+    assert "visualizer-canvas" in response.text
+    assert "teleprompter-list" in response.text
+
+
+def test_list_books(client):
+    """Verifies the /api/books endpoint returns available fiction books."""
+    response = client.get("/api/books")
+    assert response.status_code == 200
+    data = response.json()
+    assert "books" in data
+    filenames = [b["filename"] for b in data["books"]]
+    assert "the_great_gatsby.pdf" in filenames
+
+
+def test_get_book_chapters(client):
+    """Verifies the /api/books/{filename}/chapters endpoint parses chapters."""
+    response = client.get("/api/books/the_great_gatsby.pdf/chapters")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_chapters"] >= 9
+    assert len(data["chapters"]) >= 9
+    assert data["chapters"][0]["index"] == 1
+    assert data["chapters"][0]["scene_count"] >= 1
+
+
+def test_list_voices(client):
+    """Verifies that the /api/voices endpoint lists all 28 Kokoro voices."""
+    response = client.get("/api/voices")
+    assert response.status_code == 200
+    data = response.json()
+    assert "voices" in data
+    assert len(data["voices"]) == 26
+    voice_ids = [v["voice_id"] for v in data["voices"]]
+    assert "bm_george" in voice_ids
+    assert "af_bella" in voice_ids
+    assert "am_adam" in voice_ids
+
+
+def test_get_and_update_cast(client):
+    """Verifies retrieval and updating of character cast sheets."""
+    response = client.get("/api/books/the_great_gatsby.pdf/cast")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["exists"] is True
+    assert "characters" in data
+    assert "narrator" in data["characters"]
+
+    # Test update
+    payload = {
+        "book_title": "The Great Gatsby",
+        "narrator_id": "narrator",
+        "characters": data["characters"]
+    }
+    update_resp = client.post("/api/books/the_great_gatsby.pdf/cast", json=payload)
+    assert update_resp.status_code == 200
+    assert update_resp.json()["status"] == "saved"
+
+
+def test_voice_sample(client, monkeypatch):
+    """Verifies /api/voice-sample/{voice_id} returns WAV audio."""
+    # Mock synthesizer to avoid waiting for Kokoro ONNX model synthesis
+    synth = MagicMock()
+    synth.synthesize_line.return_value = AudioSegment.silent(duration=500)
+    monkeypatch.setattr(web_app, "get_synthesizer", lambda: synth)
+
+    # Clear cache for testing
+    web_app._voice_samples_cache.clear()
+
+    response = client.get("/api/voice-sample/bm_george")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert len(response.content) > 44
+
+
+def test_list_outputs(client):
+    """Verifies /api/outputs returns generated audio tracks."""
+    response = client.get("/api/outputs")
+    assert response.status_code == 200
+    data = response.json()
+    assert "outputs" in data
+    assert isinstance(data["outputs"], list)
+
+
+def test_websocket_streaming_flow(client, monkeypatch):
+    """Verifies real-time WebSocket drama streaming communication."""
+    # Mock director to return a simple screenplay immediately
+    mock_director = MagicMock()
+    mock_screenplay = Screenplay(
+        chapter_index=1,
+        scene_index=1,
+        lines=[
+            ScreenplayLine(speaker="narrator", text="The green light shone across the bay.", emotion="reflective", speed=1.0, pause_after_ms=300),
+            ScreenplayLine(speaker="char_daisy", text="I'm p-paralyzed with happiness.", emotion="breathless", speed=1.05, pause_after_ms=400),
+        ]
+    )
+    mock_director.direct_scene.return_value = (mock_screenplay, None)
+    monkeypatch.setattr(web_app, "get_director", lambda: mock_director)
+
+    # Mock synthesizer to yield audio lines quickly
+    mock_synth = MagicMock()
+    def mock_stream(screenplay, cast_sheet):
+        for i, line in enumerate(screenplay.lines, 1):
+            yield i, len(screenplay.lines), line, "bm_george", AudioSegment.silent(duration=300)
+
+    mock_synth.stream_scene_lines = mock_stream
+    monkeypatch.setattr(web_app, "get_synthesizer", lambda: mock_synth)
+
+    with client.websocket_connect("/ws/stream/the_great_gatsby.pdf") as websocket:
+        websocket.send_json({"action": "start", "chapter": 1, "scenes": 1})
+
+        # 1. Started event
+        msg1 = websocket.receive_json()
+        assert msg1["type"] == "started"
+        assert msg1["chapter_index"] == 1
+
+        # 2. Scene start event
+        msg2 = websocket.receive_json()
+        assert msg2["type"] == "scene_start"
+        assert msg2["scene_index"] == 1
+
+        # 3. Screenplay ready event
+        msg3 = websocket.receive_json()
+        assert msg3["type"] == "screenplay_ready"
+        assert msg3["total_lines"] == 2
+        assert len(msg3["lines"]) == 2
+
+        # 4. Line audio events
+        line1 = websocket.receive_json()
+        assert line1["type"] == "line_audio"
+        assert line1["line_index"] == 1
+        assert "audio_base64" in line1
+
+        line2 = websocket.receive_json()
+        assert line2["type"] == "line_audio"
+        assert line2["line_index"] == 2
+
+        # 5. Scene completed
+        scene_done = websocket.receive_json()
+        assert scene_done["type"] == "scene_completed"
+
+        # 6. Finished
+        finished = websocket.receive_json()
+        assert finished["type"] == "finished"

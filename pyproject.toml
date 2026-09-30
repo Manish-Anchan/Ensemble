@@ -8,12 +8,16 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.142.1",
     "kokoro-onnx>=0.6.1",
     "openai>=3.14.1",
     "pydub>=0.25.1",
     "pymupdf>=1.28.2",
     "python-dotenv>=1.2.3",
+    "python-multipart>=0.0.32",
     "soundfile>=0.14.0",
+    "uvicorn>=0.54.0",
+    "websockets>=17.1",
 ]
 
 [project.scripts]
@@ -25,5 +29,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=9.1.1",
 ]
