@@ -43,14 +43,18 @@ class CastingProducer:
 
     def _call_with_retry(self, messages: List[Dict[str, str]], max_retries: int = 3):
         """Executes LLM chat completion with backoff retry when rate limits or transient server spikes occur."""
+        is_gpt_oss = "gpt-oss" in self.model or "120b" in self.model or "20b" in self.model
         for attempt in range(max_retries + 1):
             try:
-                return self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=0.2,
-                    response_format={"type": "json_object"}
-                )
+                kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
+                }
+                if is_gpt_oss:
+                    kwargs["extra_body"] = {"reasoning_effort": "low"}
+                return self.client.chat.completions.create(**kwargs)
             except (RateLimitError, APIStatusError) as e:
                 err_msg = str(e)
                 status = getattr(e, "status_code", 0)
@@ -99,8 +103,8 @@ AVAILABLE VOICE CATALOG:
 
 RULES:
 1. IDENTIFY THE NARRATOR:
-   - Determine if the narrator is First-Person (e.g. Nick Carraway in Gatsby, who is both narrator and character) or Third-Person Omniscient.
-   - If First-Person, note their character name in the narrator profile.
+   - Determine if the narrator is First-Person (a character in the story who also speaks and acts) or Third-Person Omniscient.
+   - If First-Person, use their character name as the narrator name with ID "narrator".
    - The Narrator must have ID "narrator".
 
 2. IDENTIFY ALL SPEAKING & PROMINENT CHARACTERS:
@@ -114,6 +118,7 @@ RULES:
      - aliases: List of all names/nicknames/titles used to refer to this character in dialogue or narrative (e.g. ["Gatsby", "Mr. Gatsby", "Jay"]).
      - voice_id: Exactly one voice_id chosen from the AVAILABLE VOICE CATALOG above. Match the character's gender, age, and personality.
      - voice_rationale: 1 concise sentence explaining why this voice suits the character.
+   - IMPORTANT: If the narrator is First-Person, DO NOT create a second duplicate character for them! Their spoken dialogue and narration are both voiced by "narrator".
 
 3. VOICE COLLISION PREVENTION:
    - Distinct primary/secondary characters MUST have different voice_ids! Do not cast the same voice for two different main characters.
@@ -185,7 +190,17 @@ RULES:
         ])
 
         raw_content = response.choices[0].message.content or "{}"
-        parsed = json.loads(raw_content)
+        try:
+            parsed = json.loads(raw_content)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group(0))
+                except Exception:
+                    parsed = {}
+            else:
+                parsed = {}
 
         # Build / merge CastSheet
         characters_dict: Dict[str, CharacterProfile] = {}
@@ -267,6 +282,29 @@ RULES:
                 voice_rationale="Default classic British fiction narrator."
             )
 
+        # First-person narrator reconciliation:
+        # If the narrator has a character name, ensure any duplicate character profile
+        # for that same person is merged into narrator so they share a single unified voice.
+        narrator_prof = characters_dict.get("narrator")
+        if narrator_prof and narrator_prof.name.lower() not in ("narrator", "story narrator"):
+            n_name_lower = narrator_prof.name.lower()
+            duplicates = []
+            for cid, c in characters_dict.items():
+                if cid != "narrator" and (c.name.lower() == n_name_lower or c.name.lower() in [a.lower() for a in narrator_prof.aliases]):
+                    duplicates.append(cid)
+            for dup_id in duplicates:
+                dup = characters_dict.pop(dup_id)
+                for a in [dup.name] + dup.aliases:
+                    if a and a not in narrator_prof.aliases:
+                        narrator_prof.aliases.append(a)
+
+            # Ensure common slug forms (e.g. "char_nick", "nick") are in aliases for dialogue resolution
+            first_name = narrator_prof.name.split()[0].lower()
+            slug = narrator_prof.name.lower().replace(" ", "_")
+            for alias_cand in [first_name, f"char_{first_name}", f"char_{slug}"]:
+                if alias_cand not in [a.lower() for a in narrator_prof.aliases]:
+                    narrator_prof.aliases.append(alias_cand)
+
         cast_sheet = CastSheet(
             book_title=book_title,
             characters=characters_dict,
@@ -323,3 +361,31 @@ RULES:
             if on_scene_done:
                 on_scene_done(s, sheet, new_chars, duration)
         return sheet
+
+    def cast_book(
+        self,
+        book: Any,
+        max_scenes: int = 3,
+    ) -> CastSheet:
+        """
+        Casts characters for a book by analyzing its opening scenes (up to max_scenes),
+        generating the foundational CastSheet. Further characters discovered later
+        will be dynamically cast just-in-time during scene direction.
+        """
+        sample_prose = ""
+        count = 0
+        for ch in getattr(book, "chapters", []):
+            for sc in getattr(ch, "scenes", []):
+                text = getattr(sc, "text", str(sc))
+                sample_prose += f"\n\n--- Chapter {getattr(ch, 'index', 1)}, Scene {getattr(sc, 'scene_index', 1)} ---\n" + text
+                count += 1
+                if count >= max_scenes:
+                    break
+            if count >= max_scenes:
+                break
+
+        title = getattr(book, "title", "Untitled Book")
+        if not sample_prose.strip():
+            sample_prose = title
+
+        return self.cast_characters(title, sample_prose)

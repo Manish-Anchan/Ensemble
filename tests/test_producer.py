@@ -1,3 +1,4 @@
+import json
 import pytest
 from pathlib import Path
 from ensemble.producer.catalog import KOKORO_VOICE_CATALOG, get_default_narrator_voice
@@ -195,4 +196,69 @@ def test_cast_scene_streaming(monkeypatch):
     assert new_chars[0].name == "Jordan Baker"
     assert new_chars[0].voice_id == "bf_isabella"
     assert "char_jordan" in updated_sheet.characters
+
+
+def test_cast_book_method(monkeypatch):
+    """Verifies that cast_book parses opening scenes and returns a CastSheet."""
+    from ensemble.producer.casting import CastingProducer
+    from ensemble.parser.models import Book, Chapter, SceneChunk
+
+    producer = CastingProducer(api_key="mock-key")
+
+    mock_json = {
+        "characters": [
+            {
+                "id": "char_nick",
+                "name": "Nick Carraway",
+                "gender": "male",
+                "role": "protagonist",
+                "personality_traits": ["reserved"],
+                "aliases": ["Nick"],
+                "voice_id": "am_adam",
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        producer,
+        "_call_with_retry",
+        lambda messages: type(
+            "MockResp",
+            (),
+            {
+                "choices": [
+                    type("Choice", (), {"message": type("Msg", (), {"content": json.dumps(mock_json)})()})()
+                ]
+            },
+        )(),
+    )
+
+    book = Book(
+        title="The Great Gatsby",
+        chapters=[
+            Chapter(
+                index=1,
+                title="Chapter 1",
+                raw_text="In my younger and more vulnerable years...",
+                clean_text="In my younger and more vulnerable years...",
+                page_start=1,
+                page_end=2,
+                scenes=[
+                    SceneChunk(
+                        chapter_index=1,
+                        scene_index=1,
+                        text="In my younger and more vulnerable years...",
+                        word_count=7,
+                        start_paragraph=0,
+                        end_paragraph=1,
+                    ),
+                ]
+            )
+        ]
+    )
+
+    cast_sheet = producer.cast_book(book)
+    assert cast_sheet.book_title == "The Great Gatsby"
+    assert "narrator" in cast_sheet.characters
+    assert "char_nick" in cast_sheet.characters
 

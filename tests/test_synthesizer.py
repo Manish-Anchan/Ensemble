@@ -59,3 +59,16 @@ def test_synthesizer_mock_scene(monkeypatch, tmp_path: Path):
     exported = synth.export_audio(audio, out_file)
     assert exported.exists()
     assert exported.stat().st_size > 1000
+
+
+def test_synthesize_empty_or_punctuation_handles_gracefully():
+    """Verifies that synthesize_line does not crash on empty text, whitespace, or pure punctuation."""
+    synth = DramaSynthesizer(
+        model_path="models/kokoro-v1.0.onnx",
+        voices_path="models/voices-v1.0.bin",
+    )
+    # Without calling ONNX engine, empty or pure punctuation should return silent AudioSegment
+    for bad_text in ["", "   ", "---", "* * *", "..."]:
+        audio = synth.synthesize_line(bad_text)
+        assert isinstance(audio, AudioSegment)
+        assert len(audio) == 250

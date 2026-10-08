@@ -13,6 +13,8 @@ FORMAT  ?= wav
 
 PORT    ?= 8080
 
+export LD_LIBRARY_PATH := $(CURDIR)/models/cuda_libs:$(LD_LIBRARY_PATH)
+
 .PHONY: help test test-v play play-scene produce-ch produce-mp3 produce-all produce-all-mp3 produce-range script-ch script-all cast clean-cache status web
 
 # ------------------------------------------------------------------------------
@@ -50,10 +52,17 @@ help:
 	@echo "======================================================================"
 
 # ------------------------------------------------------------------------------
-# Web Studio & Live Streaming Player (FastAPI + Modern Web Audio UI)
+# Web Studio & Live Streaming Player (FastAPI + React Studio UI)
 # ------------------------------------------------------------------------------
 web:
+	@if [ ! -d "src/ensemble/web/dist" ]; then $(MAKE) web-build; fi
 	$(PYTHON) -m ensemble.web --port $(PORT)
+
+web-build:
+	cd frontend && npm run build
+
+web-dev:
+	cd frontend && npm run dev
 
 # ------------------------------------------------------------------------------
 # Live Streaming Playback (Jitter Buffer -> Speakers)

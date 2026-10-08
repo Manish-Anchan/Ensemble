@@ -40,17 +40,27 @@ class SceneDirector:
 
     def _call_with_retry(self, messages: List[Dict[str, str]], max_retries: int = 3):
         """Executes LLM chat completion with backoff retry when rate limits or server spikes occur."""
+        is_gpt_oss = "gpt-oss" in self.model or "120b" in self.model or "20b" in self.model
+        cur_max_tokens = 4000 if is_gpt_oss else 1000
+        backup_keys = [k for k in [os.getenv("PRODUCER_API_KEY"), os.getenv("LLM_API_KEY")] if k and k != self.api_key]
+        active_client = self.client
+
         for attempt in range(max_retries + 1):
             try:
-                return self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=0.2,
-                    response_format={"type": "json_object"}
-                )
+                kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": cur_max_tokens,
+                }
+                if is_gpt_oss:
+                    kwargs["extra_body"] = {"reasoning_effort": "low"}
+                return active_client.chat.completions.create(**kwargs)
             except (RateLimitError, APIStatusError) as e:
                 err_msg = str(e)
                 status = getattr(e, "status_code", 0)
+                is_otpm = "reduce max_tokens" in err_msg or "output tokens per minute" in err_msg or "OTPM" in err_msg
                 is_rate_limit = (
                     isinstance(e, RateLimitError)
                     or "rate_limit_exceeded" in err_msg
@@ -60,13 +70,28 @@ class SceneDirector:
                 )
                 is_server_busy = status in (500, 502, 503, 504) or "high demand" in err_msg or "UNAVAILABLE" in err_msg
 
-                if (is_rate_limit or is_server_busy) and attempt < max_retries:
-                    if is_server_busy:
+                if (is_rate_limit or is_server_busy or is_otpm) and attempt < max_retries:
+                    if is_otpm:
+                        limit_match = re.search(r"Limit\s+(\d+)", err_msg, re.IGNORECASE)
+                        if limit_match:
+                            cur_max_tokens = max(500, int(limit_match.group(1)) - 10)
+                        else:
+                            cur_max_tokens = max(500, cur_max_tokens - 150)
+                        wait_sec = 2.0
+                        print(f"   ⏳ Provider OTPM limit exceeded. Adjusted max_tokens to {cur_max_tokens} and retrying in {wait_sec:.1f}s...")
+                    elif is_server_busy:
                         wait_sec = 2.5 * (attempt + 1)
                         print(f"   ⏳ Provider experiencing temporary high demand ({status or 503}). Retrying in {wait_sec:.1f}s...")
                     else:
                         match = re.search(r"try again in ([\d\.]+)s", err_msg)
-                        wait_sec = float(match.group(1)) + 1.5 if match else (12.0 * (attempt + 1))
+                        wait_sec = float(match.group(1)) + 1.5 if match else (6.0 * (attempt + 1))
+                        # If we have a backup API key, switch immediately
+                        if backup_keys:
+                            alt_key = backup_keys.pop(0)
+                            active_client = OpenAI(api_key=alt_key, base_url=self.base_url)
+                            print(f"   🔄 Switched to backup LLM API key after rate limit.")
+                            time.sleep(1.0)
+                            continue
                         print(f"   ⏳ Director rate limit reached. Waiting {wait_sec:.1f}s before retry...")
                     time.sleep(wait_sec)
                     continue
@@ -85,27 +110,39 @@ class SceneDirector:
 Your mission is to adapt raw narrative fiction prose into an expressive, line-by-line screenplay for multiple voice actors.
 {cast_list_str}
 RULES:
-1. IDENTIFY ALL LINES:
-   - Split the scene prose into sequential units: dialogue lines and narrative descriptive blocks.
+1. IDENTIFY ALL LINES & ASSIGN SPEAKERS:
+   - Split the scene prose into sequential units: spoken dialogue lines and narrative descriptive blocks.
    - For narrative blocks, set speaker to "narrator".
    - For spoken dialogue, set speaker to the exact character ID from the cast list above (e.g. "char_firstname").
+   - If the story is told by a first-person narrator who is also a character in the story (e.g. Nick Carraway, Jane Eyre, Katniss Everdeen), use their registered ID (e.g. "narrator") for BOTH their narrative thoughts and their spoken dialogue. They are the same person and use the same voice actor.
 
-2. STRICT DIALOGUE PURITY (STRIP AUTHOR TAGS):
-   - Dialogue lines MUST contain spoken words only. Strip all author tags, speech verbs, and attribution clauses.
+2. STRICT DIALOGUE PURITY (SPOKEN WORDS ONLY):
+   - Dialogue lines MUST contain spoken words only (words audibly articulated from the character's mouth, typically in quotes).
+   - Strip all author tags, speech verbs, and attribution clauses (e.g. "he said", "whispered Marcus", "I asked").
    - BAD: "Put the gun down," Marcus whispered, his hands trembling.
    - GOOD: 
      - Line 1: speaker: "char_marcus", emotion: "whisper", text: "Put the gun down."
      - Line 2: speaker: "narrator", emotion: "tense", text: "His hands were trembling."
 
-3. ACTING DIRECTION:
+3. ACTION BEATS & PHYSICAL MOVEMENTS BELONG TO THE NARRATOR:
+   - A character speaker ID can ONLY be assigned to words spoken aloud in conversation.
+   - Any physical action, movement, gesture, entrance/exit, or description of a character (even if their name is the subject of the sentence!) is DESCRIPTIVE NARRATION and MUST be assigned to "narrator".
+   - A character voice actor must NEVER utter third-person sentences describing themselves or others!
+   - BAD: speaker: "char_daisy", text: "Then suddenly she threw her napkin on the table and excused herself." (WRONG: This is an action beat describing Daisy, not her speaking!)
+   - GOOD: speaker: "narrator", text: "Then suddenly she threw her napkin on the table and excused herself and went into the house."
+   - BAD: speaker: "char_tom", text: "Tom and Miss Baker with several feet of twilight between them strolled back into the library." (WRONG: Third-person action, must be narrator!)
+   - GOOD: speaker: "narrator", text: "Tom and Miss Baker with several feet of twilight between them strolled back into the library."
+
+4. ACTING DIRECTION:
    - emotion: 1 expressive acting instruction word (e.g. "tense", "whisper", "sarcastic", "arrogant", "warm", "mournful", "urgent", "flirtatious", "calm", "bored", "furious").
    - speed: float between 0.90 and 1.10 (0.95 for slow/deliberate/solemn; 1.0 for normal; 1.05 for hurried/agitated).
    - pause_after_ms: integer milliseconds of silence to follow the line (350-450ms for dialogue exchanges; 550-700ms after narrative descriptions or scene beats).
 
-4. DYNAMIC UNREGISTERED CHARACTERS:
-   - If a character speaks who is NOT in the registered cast, use a slug like "char_speakername" as speaker, and list them in the "new_characters" array with their name, gender ("male"|"female"), and personality_traits.
+5. DYNAMIC UNREGISTERED CHARACTERS:
+   - If a new character speaks who is NOT in the registered cast, use a slug like "char_speakername" as speaker, and list them in the "new_characters" array with their name, gender ("male"|"female"), and personality_traits.
+   - NEVER add a new character if they are already in the cast or if they are the narrator.
 
-5. RESPONSE FORMAT:
+6. RESPONSE FORMAT:
    Return ONLY a valid JSON object matching this schema:
 {{
   "lines": [
@@ -173,7 +210,13 @@ RULES:
         except json.JSONDecodeError:
             # Fallback: extract JSON block if wrapped in markdown
             match = re.search(r"\{.*\}", raw_content, re.DOTALL)
-            parsed = json.loads(match.group(0)) if match else {}
+            if match:
+                try:
+                    parsed = json.loads(match.group(0))
+                except Exception:
+                    parsed = {}
+            else:
+                parsed = {}
 
         raw_lines = parsed.get("lines", [])
         if not raw_lines and isinstance(parsed, list):
@@ -190,7 +233,15 @@ RULES:
                 char_slug = f"char_{name.lower().replace(' ', '_')}"
                 if char_slug in cast_sheet.characters:
                     continue
-                
+
+                # Check if this character already matches an existing character or narrator by name/alias
+                existing_char = cast_sheet.get_character_for_speaker(name) or cast_sheet.get_character_for_speaker(char_slug)
+                if existing_char:
+                    # Link alias so char_slug resolves to the existing character
+                    if char_slug not in cast_sheet.characters:
+                        cast_sheet.characters[char_slug] = existing_char
+                    continue
+
                 gender = nc.get("gender", "male").lower()
                 voice_id = self._pick_unused_voice(gender, used_voices, cast_sheet.default_narrator_voice)
                 used_voices.add(voice_id)
@@ -221,22 +272,29 @@ RULES:
             # Resolve speaker to known character ID or alias if necessary
             resolved_speaker = raw_speaker
             if cast_sheet and raw_speaker != "narrator":
-                # Check if it directly matches an ID
-                if raw_speaker not in cast_sheet.characters:
-                    # Try finding by name or alias
-                    for cid, c in cast_sheet.characters.items():
-                        if raw_speaker == c.name.lower() or raw_speaker in [a.lower() for a in c.aliases]:
-                            resolved_speaker = cid
-                            break
-                        if raw_speaker.replace("char_", "") in c.name.lower():
-                            resolved_speaker = cid
-                            break
+                # First check alias / name resolution
+                char_match = cast_sheet.get_character_for_speaker(raw_speaker)
+                if char_match:
+                    resolved_speaker = char_match.id
+                elif raw_speaker in cast_sheet.characters:
+                    resolved_speaker = cast_sheet.characters[raw_speaker].id
 
-            speed = float(d.get("speed", 1.0))
+            raw_speed = d.get("speed", 1.0)
+            if isinstance(raw_speed, str):
+                speed_map = {"slow": 0.95, "normal": 1.0, "fast": 1.05, "very slow": 0.90, "very fast": 1.10}
+                speed = speed_map.get(raw_speed.lower().strip(), 1.0)
+            else:
+                try:
+                    speed = float(raw_speed)
+                except (ValueError, TypeError):
+                    speed = 1.0
             # Clamp speed to sane acoustic range for Kokoro (0.85 - 1.15)
             speed = max(0.85, min(1.15, speed))
 
-            pause_after_ms = int(d.get("pause_after_ms", 400 if resolved_speaker != "narrator" else 550))
+            try:
+                pause_after_ms = int(d.get("pause_after_ms", 400 if resolved_speaker != "narrator" else 550))
+            except (ValueError, TypeError):
+                pause_after_ms = 400 if resolved_speaker != "narrator" else 550
 
             screenplay_lines.append(
                 ScreenplayLine(
@@ -254,6 +312,12 @@ RULES:
             for spl in screenplay_lines:
                 spk = spl.speaker
                 if spk != "narrator" and spk not in cast_sheet.characters:
+                    # Check if it matches an existing character or narrator by alias/name
+                    char_match = cast_sheet.get_character_for_speaker(spk)
+                    if char_match:
+                        spl.speaker = char_match.id
+                        continue
+
                     clean_name = spk.replace("char_", "").replace("_", " ").title()
 
                     fem_hints = ["miss", "mrs", "ms", "lady", "girl", "woman", "daisy", "jordan", "baker", "catherine", "myrtle", "madam"]
@@ -281,6 +345,20 @@ RULES:
                     )
                     cast_sheet.characters[spk] = profile
                     print(f"   🎭 Auto-Cast Safeguard: Discovered unregistered speaker '{clean_name}' ({gender}) in Scene {s_idx} -> Assigned voice '{voice_id}'")
+
+        # Fallback safeguard: if LLM failed to return lines but prose_text exists,
+        # ensure story prose is never dropped or skipped by creating a narrator line.
+        if not screenplay_lines and prose_text.strip():
+            print(f"   ⚠️ Scene {s_idx} direction produced 0 lines. Falling back to default narrator prose.")
+            screenplay_lines.append(
+                ScreenplayLine(
+                    speaker="narrator",
+                    text=prose_text.strip(),
+                    emotion="neutral",
+                    speed=1.0,
+                    pause_after_ms=500,
+                )
+            )
 
         screenplay = Screenplay(
             chapter_index=ch_idx,

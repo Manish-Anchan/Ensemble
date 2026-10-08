@@ -4,6 +4,8 @@ import json
 import time
 import base64
 import asyncio
+import logging
+import traceback
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
@@ -12,6 +14,11 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
+logger = logging.getLogger("ensemble.web")
 
 from ensemble.parser.extractor import load_book
 from ensemble.parser.models import Book, Chapter, SceneChunk
@@ -37,12 +44,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SAMPLES_DIR = PROJECT_ROOT / "samples"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+DIST_DIR = Path(__file__).resolve().parent / "dist"
 
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Mount static assets
+# Mount static and React dist assets
+if (DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Shared In-Memory Caches & Singletons
@@ -50,6 +61,9 @@ _books_cache: Dict[str, Book] = {}
 _synthesizer: Optional[DramaSynthesizer] = None
 _director: Optional[SceneDirector] = None
 _voice_samples_cache: Dict[str, bytes] = {}
+
+# Dedicated background worker thread pool for heavy LLM & ONNX synthesis
+_worker_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ensemble_worker")
 
 
 def get_synthesizer() -> DramaSynthesizer:
@@ -100,6 +114,10 @@ def find_cast_sheet(book_stem: str) -> Optional[Path]:
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
+    react_index = DIST_DIR / "index.html"
+    if react_index.exists():
+        with open(react_index, "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
     index_file = STATIC_DIR / "index.html"
     if not index_file.exists():
         return HTMLResponse("<h1>Ensemble Studio UI is initializing...</h1>", status_code=200)
@@ -200,6 +218,16 @@ async def list_voices():
     return {"voices": catalog}
 
 
+def _generate_wav_sample(voice_id: str, voice: VoiceDescriptor) -> bytes:
+    synth = get_synthesizer()
+    sample_text = f"Hello, I am {voice.name}. Ready to bring your characters to life in full dramatic sound."
+    lang = "en-gb" if voice.accent == "british" else "en-us"
+    audio_seg = synth.synthesize_line(sample_text, voice_id=voice_id, speed=1.0, lang=lang)
+    buf = io.BytesIO()
+    audio_seg.export(buf, format="wav")
+    return buf.getvalue()
+
+
 @app.get("/api/voice-sample/{voice_id}")
 async def get_voice_sample(voice_id: str):
     """Generates or returns a cached voice preview sample as WAV audio."""
@@ -210,18 +238,9 @@ async def get_voice_sample(voice_id: str):
         return Response(content=_voice_samples_cache[voice_id], media_type="audio/wav")
 
     voice = KOKORO_VOICE_CATALOG[voice_id]
-    sample_text = f"Hello, I am {voice.name}. Ready to bring your characters to life in full dramatic sound."
-
     try:
-        synth = get_synthesizer()
-        lang = "en-gb" if voice.accent == "british" else "en-us"
-        audio_seg = synth.synthesize_line(sample_text, voice_id=voice_id, speed=1.0, lang=lang)
-
-        buf = io.BytesIO()
-        audio_seg.export(buf, format="wav")
-        wav_bytes = buf.getvalue()
+        wav_bytes = await asyncio.to_thread(_generate_wav_sample, voice_id, voice)
         _voice_samples_cache[voice_id] = wav_bytes
-
         return Response(content=wav_bytes, media_type="audio/wav")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Synthesis failed: {str(e)}")
@@ -357,9 +376,15 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
         if cast_path:
             cast_sheet = CastSheet.load_json(cast_path)
         else:
-            # Fallback auto-cast
+            # Fallback auto-cast on worker executor so event loop is not blocked
             producer = CastingProducer()
-            cast_sheet = producer.cast_book(book)
+            loop = asyncio.get_running_loop()
+            cast_sheet = await loop.run_in_executor(_worker_executor, producer.cast_book, book)
+            saved_cast_path = SAMPLES_DIR / f"{stem}_cast.json"
+            try:
+                cast_sheet.save_json(saved_cast_path)
+            except Exception as e:
+                logger.warning(f"Failed to persist auto-cast sheet: {e}")
 
         synth = get_synthesizer()
         director = get_director()
@@ -367,12 +392,12 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
         # Listen for start command
         init_data = await websocket.receive_json()
         action = init_data.get("action", "start")
-        if action != "start":
+        if action not in ("start", "start_chapter_stream"):
             await websocket.send_json({"type": "error", "message": f"Unknown action: {action}"})
             await websocket.close()
             return
 
-        target_ch_idx = int(init_data.get("chapter", 1))
+        target_ch_idx = int(init_data.get("chapter") or init_data.get("chapter_index") or 1)
         max_scenes = int(init_data.get("scenes", 0))  # 0 means all scenes in chapter
 
         # Locate target chapter
@@ -397,88 +422,182 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
             "total_scenes": len(scenes_to_stream),
         })
 
-        # Process scenes
-        for s_idx, scene in enumerate(scenes_to_stream, 1):
-            await websocket.send_json({
-                "type": "scene_start",
-                "scene_index": scene.scene_index,
-                "current_scene_number": s_idx,
-                "total_scenes": len(scenes_to_stream),
-                "word_count": scene.word_count,
-            })
+        loop = asyncio.get_running_loop()
+        stop_event = threading.Event()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=40)
 
-            # Direct screenplay
-            t0 = time.time()
-            screenplay, updated_cast = director.direct_scene(
-                scene=scene,
-                cast_sheet=cast_sheet,
-                chapter_index=scene.chapter_index,
-                scene_index=scene.scene_index,
-            )
-            cast_sheet = updated_cast or cast_sheet
-            direct_dur = time.time() - t0
+        def push_item(item):
+            if stop_event.is_set():
+                return
+            fut = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+            while not stop_event.is_set():
+                try:
+                    fut.result(timeout=0.1)
+                    return
+                except FutureTimeoutError:
+                    continue
+                except Exception:
+                    return
 
-            # Send full screenplay for teleprompter preview
-            lines_meta = []
-            for line in screenplay.lines:
-                char = cast_sheet.get_character_for_speaker(line.speaker)
-                lines_meta.append({
-                    "speaker": line.speaker,
-                    "character_name": char.name if char else line.speaker.replace("char_", "").replace("_", " ").title(),
-                    "text": line.text,
-                    "emotion": line.emotion,
-                    "speed": line.speed,
-                    "pause_after_ms": line.pause_after_ms,
-                    "voice_id": cast_sheet.get_voice_for_speaker(line.speaker),
-                })
+        def producer_worker():
+            """Worker thread: runs heavy LLM directing & ONNX synthesis without blocking asyncio loop."""
+            nonlocal cast_sheet
+            global_line_counter = 0
+            try:
+                for s_idx, scene in enumerate(scenes_to_stream, 1):
+                    if stop_event.is_set():
+                        break
 
-            await websocket.send_json({
-                "type": "screenplay_ready",
-                "scene_index": scene.scene_index,
-                "total_lines": len(screenplay.lines),
-                "lines": lines_meta,
-                "direct_duration_sec": round(direct_dur, 2),
-            })
+                    push_item({
+                        "type": "scene_start",
+                        "scene_index": scene.scene_index,
+                        "current_scene_number": s_idx,
+                        "total_scenes": len(scenes_to_stream),
+                        "word_count": scene.word_count,
+                    })
 
-            # Stream audio lines live
-            for line_idx, total_lines, line, voice_id, line_audio in synth.stream_scene_lines(screenplay, cast_sheet):
-                # Convert line audio to in-memory WAV bytes
-                buf = io.BytesIO()
-                line_audio.export(buf, format="wav")
-                wav_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                    # Direct screenplay (LLM call off the event loop)
+                    t0 = time.time()
+                    screenplay, updated_cast = director.direct_scene(
+                        scene=scene,
+                        cast_sheet=cast_sheet,
+                        chapter_index=scene.chapter_index,
+                        scene_index=scene.scene_index,
+                    )
+                    cast_sheet = updated_cast or cast_sheet
+                    direct_dur = time.time() - t0
 
-                char = cast_sheet.get_character_for_speaker(line.speaker)
-                char_name = char.name if char else line.speaker.replace("char_", "").replace("_", " ").title()
+                    if stop_event.is_set():
+                        break
 
-                payload = {
-                    "type": "line_audio",
-                    "scene_index": scene.scene_index,
-                    "line_index": line_idx,
-                    "total_lines": total_lines,
-                    "speaker": line.speaker,
-                    "character_name": char_name,
-                    "voice_id": voice_id,
-                    "emotion": line.emotion,
-                    "speed": line.speed,
-                    "pause_after_ms": line.pause_after_ms,
-                    "duration_ms": len(line_audio),
-                    "text": line.text,
-                    "audio_base64": wav_b64,
-                }
-                await websocket.send_json(payload)
+                    lines_meta = []
+                    scene_start_global_idx = global_line_counter
+                    for s_line_idx, line in enumerate(screenplay.lines, 1):
+                        global_line_counter += 1
+                        char = cast_sheet.get_character_for_speaker(line.speaker)
+                        lines_meta.append({
+                            "line_index": global_line_counter,
+                            "scene_line_index": s_line_idx,
+                            "scene_index": scene.scene_index,
+                            "speaker": line.speaker,
+                            "character_name": char.name if char else line.speaker.replace("char_", "").replace("_", " ").title(),
+                            "text": line.text,
+                            "emotion": line.emotion,
+                            "speed": line.speed,
+                            "pause_after_ms": line.pause_after_ms,
+                            "voice_id": cast_sheet.get_voice_for_speaker(line.speaker),
+                        })
 
-                # Yield control briefly to event loop
-                await asyncio.sleep(0.01)
+                    push_item({
+                        "type": "screenplay_ready",
+                        "scene_index": scene.scene_index,
+                        "scene_number": s_idx,
+                        "total_lines": len(screenplay.lines),
+                        "lines": lines_meta,
+                        "direct_duration_sec": round(direct_dur, 2),
+                    })
 
-            await websocket.send_json({
-                "type": "scene_completed",
-                "scene_index": scene.scene_index,
-            })
+                    # Stream audio lines (ONNX inference off the event loop)
+                    audio_line_counter = scene_start_global_idx
+                    for line_idx, total_lines, line, voice_id, line_audio in synth.stream_scene_lines(screenplay, cast_sheet):
+                        if stop_event.is_set():
+                            break
 
-        await websocket.send_json({
-            "type": "finished",
-            "message": "All scenes streamed successfully.",
-        })
+                        audio_line_counter += 1
+                        buf = io.BytesIO()
+                        line_audio.export(buf, format="wav")
+                        wav_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+                        char = cast_sheet.get_character_for_speaker(line.speaker)
+                        char_name = char.name if char else line.speaker.replace("char_", "").replace("_", " ").title()
+
+                        payload = {
+                            "type": "line_audio",
+                            "scene_index": scene.scene_index,
+                            "line_index": audio_line_counter,
+                            "scene_line_index": line_idx,
+                            "total_lines": total_lines,
+                            "speaker": line.speaker,
+                            "character_name": char_name,
+                            "voice_id": voice_id,
+                            "emotion": line.emotion,
+                            "speed": line.speed,
+                            "pause_after_ms": line.pause_after_ms,
+                            "duration_ms": len(line_audio),
+                            "text": line.text,
+                            "audio_base64": wav_b64,
+                        }
+                        push_item(payload)
+
+                    if stop_event.is_set():
+                        break
+
+                    push_item({
+                        "type": "scene_completed",
+                        "scene_index": scene.scene_index,
+                    })
+
+                if not stop_event.is_set():
+                    push_item({
+                        "type": "finished",
+                        "message": "All scenes streamed successfully.",
+                    })
+
+            except Exception as exc:
+                raw_err = str(exc)
+                logger.error(f"Streaming error in producer_worker: {raw_err}\n{traceback.format_exc()}")
+                if "rate_limit" in raw_err.lower() or "429" in raw_err or "tpm" in raw_err.lower() or "otpm" in raw_err.lower():
+                    clean_msg = "Director hit a temporary provider rate limit. Please pause for 5 seconds and resume."
+                elif "timeout" in raw_err.lower():
+                    clean_msg = "Request to the AI Director timed out. Please retry."
+                elif "connection" in raw_err.lower():
+                    clean_msg = "Connection interrupted while directing audio drama."
+                else:
+                    clean_msg = "A temporary issue occurred while directing this scene. Please retry."
+                push_item({"type": "error", "message": clean_msg, "code": "streaming_error"})
+            finally:
+                push_item(None)
+
+        # Launch producer in worker thread
+        producer_future = loop.run_in_executor(_worker_executor, producer_worker)
+
+        # Consumer task: forwards queue items to websocket
+        async def consumer():
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    await websocket.send_json(item)
+                    queue.task_done()
+            except (WebSocketDisconnect, RuntimeError, ConnectionResetError):
+                stop_event.set()
+
+        # Listener task: listens for incoming client stop/pause
+        async def listener():
+            try:
+                while not stop_event.is_set():
+                    data = await websocket.receive_json()
+                    action = data.get("action")
+                    if action in ("stop", "close"):
+                        stop_event.set()
+                        break
+            except (WebSocketDisconnect, RuntimeError, ConnectionResetError):
+                stop_event.set()
+
+        consumer_task = asyncio.create_task(consumer())
+        listener_task = asyncio.create_task(listener())
+
+        done, pending = await asyncio.wait(
+            [consumer_task, listener_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        stop_event.set()
+        for t in pending:
+            t.cancel()
+
+        await producer_future
 
     except WebSocketDisconnect:
         # Client closed connection

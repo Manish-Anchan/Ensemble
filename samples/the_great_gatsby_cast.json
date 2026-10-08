@@ -18,6 +18,8 @@
       "aliases": [
         "Carraway",
         "Nick",
+        "char_nick",
+        "char_nick_carraway",
         "narrator"
       ],
       "voice_id": "am_michael",

@@ -203,3 +203,86 @@ def test_defensive_autocast_safeguard(monkeypatch):
     assert jordan.gender == "female"
     assert jordan.voice_id.startswith("af_")  # Assigned a female voice
     assert jordan.voice_id != "am_michael"     # Did not fall back to male narrator!
+
+
+def test_director_empty_lines_narrator_fallback(monkeypatch):
+    """Verifies that if the director LLM returns empty or malformed output, it falls back to a narrator line."""
+    director = SceneDirector(api_key="mock-key")
+
+    monkeypatch.setattr(
+        director,
+        "_call_with_retry",
+        lambda messages: type(
+            "MockResp",
+            (),
+            {
+                "choices": [
+                    type("Choice", (), {"message": type("Msg", (), {"content": "```json\n{\"lines\": []}\n```"})()})()
+                ]
+            },
+        )(),
+    )
+
+    screenplay, _ = director.direct_scene(
+        scene="It was a bright cold day in April, and the clocks were striking thirteen.",
+        chapter_index=1,
+        scene_index=1,
+    )
+
+    assert len(screenplay.lines) == 1
+    assert screenplay.lines[0].speaker == "narrator"
+    assert "striking thirteen" in screenplay.lines[0].text
+
+
+def test_first_person_narrator_shared_voice(monkeypatch):
+    """Verifies that when a character is the first-person narrator, dialogue lines resolve to narrator with the same voice."""
+    director = SceneDirector(api_key="mock-key")
+
+    mock_resp = {
+        "lines": [
+            {"speaker": "narrator", "text": "I looked across the bay.", "emotion": "reflective"},
+            {"speaker": "char_nick", "text": "Is she from New York?", "emotion": "curious"},
+        ],
+        "new_characters": [
+            {"name": "Nick Carraway", "gender": "male"}
+        ]
+    }
+
+    monkeypatch.setattr(
+        director,
+        "_call_with_retry",
+        lambda messages: type(
+            "MockResp",
+            (),
+            {
+                "choices": [
+                    type("Choice", (), {"message": type("Msg", (), {"content": json.dumps(mock_resp)})()})()
+                ]
+            },
+        )(),
+    )
+
+    cast_sheet = CastSheet(
+        book_title="The Great Gatsby",
+        characters={
+            "narrator": CharacterProfile(
+                id="narrator", name="Nick Carraway", gender="male", age_group="adult",
+                role="narrator", personality_traits=[], aliases=["Nick", "Carraway", "char_nick"],
+                voice_id="am_michael"
+            )
+        }
+    )
+
+    screenplay, updated_cast = director.direct_scene(
+        scene="I looked across the bay. 'Is she from New York?' I asked.",
+        cast_sheet=cast_sheet,
+        chapter_index=1,
+        scene_index=1,
+    )
+
+    # Both lines should be unified under narrator with the same voice
+    assert screenplay.lines[0].speaker == "narrator"
+    assert screenplay.lines[1].speaker == "narrator"
+    # No duplicate char_nick character profile created
+    assert updated_cast.get_voice_for_speaker("narrator") == "am_michael"
+    assert updated_cast.get_voice_for_speaker("char_nick") == "am_michael"

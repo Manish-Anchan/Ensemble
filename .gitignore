@@ -2,7 +2,7 @@
 __pycache__/
 *.py[oc]
 build/
-dist/
+/dist/
 wheels/
 *.egg-info
 
@@ -20,3 +20,8 @@ outputs/
 
 # Local configuration
 .env
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
