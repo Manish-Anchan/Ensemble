@@ -286,3 +286,55 @@ def test_first_person_narrator_shared_voice(monkeypatch):
     # No duplicate char_nick character profile created
     assert updated_cast.get_voice_for_speaker("narrator") == "am_michael"
     assert updated_cast.get_voice_for_speaker("char_nick") == "am_michael"
+
+
+def test_previous_scene_context_and_presence(monkeypatch):
+    """Verifies that previous_scene_context is incorporated into prompt and scene_characters_present is captured."""
+    director = SceneDirector(api_key="mock-key")
+    captured_messages = []
+
+    mock_resp = {
+        "scene_characters_present": ["narrator", "char_gatz"],
+        "lines": [
+            {"speaker": "narrator", "text": "I didn't know how to reach you.", "emotion": "concerned"},
+            {"speaker": "char_gatz", "text": "It was a mad man.", "emotion": "frantic"},
+        ],
+        "new_characters": [
+            {"name": "Henry C. Gatz", "gender": "male", "personality_traits": ["aged"]}
+        ]
+    }
+
+    def mock_call(messages):
+        captured_messages.extend(messages)
+        return type(
+            "MockResp",
+            (),
+            {
+                "choices": [
+                    type("Choice", (), {"message": type("Msg", (), {"content": json.dumps(mock_resp)})()})()
+                ]
+            },
+        )()
+
+    monkeypatch.setattr(director, "_call_with_retry", mock_call)
+
+    prev_context = "Characters active in previous scene: Henry C. Gatz\nEnding of previous scene: 'I saw it in the Chicago newspaper,' he said."
+
+    screenplay, updated_cast = director.direct_scene(
+        scene="'I didn't know how to reach you.' 'It was a mad man,' he said.",
+        previous_scene_context=prev_context,
+        chapter_index=9,
+        scene_index=3,
+    )
+
+    # Verify context was in the user message
+    user_msg = next(m["content"] for m in captured_messages if m["role"] == "user")
+    assert "[PREVIOUS SCENE CONTEXT" in user_msg
+    assert "Henry C. Gatz" in user_msg
+    assert "'I saw it in the Chicago newspaper,' he said." in user_msg
+
+    # Verify scene_characters_present was preserved on Screenplay
+    assert screenplay.scene_characters_present == ["narrator", "char_gatz"]
+    assert len(screenplay.lines) == 2
+    assert screenplay.lines[0].speaker == "narrator"
+    assert screenplay.lines[1].speaker == "char_gatz"

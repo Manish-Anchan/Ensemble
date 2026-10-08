@@ -443,6 +443,8 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
             """Worker thread: runs heavy LLM directing & ONNX synthesis without blocking asyncio loop."""
             nonlocal cast_sheet
             global_line_counter = 0
+            last_scene_text: Optional[str] = None
+            last_active_speakers: List[str] = []
             try:
                 for s_idx, scene in enumerate(scenes_to_stream, 1):
                     if stop_event.is_set():
@@ -456,6 +458,20 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
                         "word_count": scene.word_count,
                     })
 
+                    # Build rolling previous scene context for pronoun and character continuity
+                    previous_scene_context = None
+                    if last_scene_text:
+                        words = last_scene_text.strip().split()
+                        trailing_words = " ".join(words[-200:]) if len(words) > 200 else last_scene_text.strip()
+                        speakers_hint = f"Characters active in previous scene: {', '.join(last_active_speakers)}\n" if last_active_speakers else ""
+                        previous_scene_context = f"{speakers_hint}Ending of previous scene:\n\"{trailing_words}\""
+                    elif scene.scene_index > 1:
+                        prev_scene_obj = next((s for s in target_chapter.scenes if s.scene_index == scene.scene_index - 1), None)
+                        if prev_scene_obj and prev_scene_obj.text:
+                            words = prev_scene_obj.text.strip().split()
+                            trailing_words = " ".join(words[-200:]) if len(words) > 200 else prev_scene_obj.text.strip()
+                            previous_scene_context = f"Ending of preceding scene:\n\"{trailing_words}\""
+
                     # Direct screenplay (LLM call off the event loop)
                     t0 = time.time()
                     screenplay, updated_cast = director.direct_scene(
@@ -463,9 +479,16 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
                         cast_sheet=cast_sheet,
                         chapter_index=scene.chapter_index,
                         scene_index=scene.scene_index,
+                        previous_scene_context=previous_scene_context,
                     )
                     cast_sheet = updated_cast or cast_sheet
                     direct_dur = time.time() - t0
+
+                    last_scene_text = scene.text
+                    last_active_speakers = [
+                        cast_sheet.characters[spk].name for spk in screenplay.speaker_counts.keys()
+                        if spk in cast_sheet.characters and spk != "narrator"
+                    ]
 
                     if stop_event.is_set():
                         break

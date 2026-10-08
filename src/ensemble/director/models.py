@@ -36,6 +36,7 @@ class Screenplay:
     chapter_index: int
     scene_index: int
     lines: List[ScreenplayLine] = field(default_factory=list)
+    scene_characters_present: List[str] = field(default_factory=list)
 
     @property
     def total_words(self) -> int:
@@ -53,6 +54,7 @@ class Screenplay:
             "chapter_index": self.chapter_index,
             "scene_index": self.scene_index,
             "total_words": self.total_words,
+            "scene_characters_present": self.scene_characters_present,
             "lines": [line.to_dict() for line in self.lines],
         }
 
@@ -63,6 +65,7 @@ class Screenplay:
             chapter_index=int(data.get("chapter_index", 1)),
             scene_index=int(data.get("scene_index", 1)),
             lines=lines,
+            scene_characters_present=data.get("scene_characters_present", []),
         )
 
     def to_json(self, indent: int = 2) -> str:

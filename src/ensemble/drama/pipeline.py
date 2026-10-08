@@ -36,6 +36,7 @@ class DramaPipeline:
         cast_sheet: CastSheet,
         book_title: str,
         on_line_stream: Optional[Callable[[int, int, ScreenplayLine, str, AudioSegment], None]] = None,
+        previous_scene_context: Optional[str] = None,
     ) -> tuple[Screenplay, AudioSegment, CastSheet]:
         """
         Processes a single scene chunk end-to-end:
@@ -44,11 +45,16 @@ class DramaPipeline:
         Returns (screenplay, audio_segment, updated_cast_sheet).
         """
         # Step 1: Direct screenplay
+        kwargs = {}
+        if previous_scene_context:
+            kwargs["previous_scene_context"] = previous_scene_context
+
         screenplay, updated_cast = self.director.direct_scene(
             scene=scene,
             cast_sheet=cast_sheet,
             chapter_index=scene.chapter_index,
             scene_index=scene.scene_index,
+            **kwargs,
         )
         current_cast = updated_cast or cast_sheet
 
@@ -86,9 +92,27 @@ class DramaPipeline:
         total_scenes = len(scenes_to_run)
         fmt = "mp3" if audio_format.lower() == "mp3" else "wav"
 
+        last_scene_text: Optional[str] = None
+        last_active_speakers: List[str] = []
+
         for s_idx, scene in enumerate(scenes_to_run, 1):
             if on_scene_start:
                 on_scene_start(scene, s_idx, total_scenes)
+
+            # Build rolling previous scene context for pronoun and character continuity
+            previous_scene_context = None
+            if last_scene_text:
+                words = last_scene_text.strip().split()
+                trailing_words = " ".join(words[-200:]) if len(words) > 200 else last_scene_text.strip()
+                speakers_hint = f"Characters active in previous scene: {', '.join(last_active_speakers)}\n" if last_active_speakers else ""
+                previous_scene_context = f"{speakers_hint}Ending of previous scene:\n\"{trailing_words}\""
+            elif scene.scene_index > 1:
+                # Direct jump to scene N > 1; fetch preceding scene from full chapter if available
+                prev_scene_obj = next((s for s in chapter.scenes if s.scene_index == scene.scene_index - 1), None)
+                if prev_scene_obj and prev_scene_obj.text:
+                    words = prev_scene_obj.text.strip().split()
+                    trailing_words = " ".join(words[-200:]) if len(words) > 200 else prev_scene_obj.text.strip()
+                    previous_scene_context = f"Ending of preceding scene:\n\"{trailing_words}\""
 
             t0 = time.time()
             screenplay, scene_audio, current_cast = self.produce_scene(
@@ -96,8 +120,15 @@ class DramaPipeline:
                 cast_sheet=current_cast,
                 book_title=book_title,
                 on_line_stream=on_line_stream,
+                previous_scene_context=previous_scene_context,
             )
             dur = time.time() - t0
+
+            last_scene_text = scene.text
+            last_active_speakers = [
+                current_cast.characters[spk].name for spk in screenplay.speaker_counts.keys()
+                if spk in current_cast.characters and spk != "narrator"
+            ]
 
             # Optionally cache individual scene audio
             if output_dir:

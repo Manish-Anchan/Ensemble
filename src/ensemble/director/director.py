@@ -110,13 +110,30 @@ class SceneDirector:
 Your mission is to adapt raw narrative fiction prose into an expressive, line-by-line screenplay for multiple voice actors.
 {cast_list_str}
 RULES:
-1. IDENTIFY ALL LINES & ASSIGN SPEAKERS:
-   - Split the scene prose into sequential units: spoken dialogue lines and narrative descriptive blocks.
-   - For narrative blocks, set speaker to "narrator".
-   - For spoken dialogue, set speaker to the exact character ID from the cast list above (e.g. "char_firstname").
-   - If the story is told by a first-person narrator who is also a character in the story (e.g. Nick Carraway, Jane Eyre, Katniss Everdeen), use their registered ID (e.g. "narrator") for BOTH their narrative thoughts and their spoken dialogue. They are the same person and use the same voice actor.
+1. ACTIVE SCENE CANDIDATES & CHARACTER PRESENCE:
+   - Identify which characters are physically PRESENT and active in this specific scene.
+   - Output "scene_characters_present" as the FIRST field in the JSON response, listing the character IDs present (e.g. ["narrator", "char_tom"]).
+   - NEVER assign dialogue to a character who is absent, elsewhere, or deceased (e.g. do NOT assign lines to a deceased character or someone who has not entered the scene).
+   - If an uncast or newly introduced character speaks (e.g. newly arrived relative, telephone operator, waiter, cab driver, butler, stranger), dynamically assign them a descriptive ID (e.g. "char_gatz", "char_operator") and add them to "new_characters".
 
-2. STRICT DIALOGUE PURITY (SPOKEN WORDS ONLY):
+2. FIRST-PERSON POV ("I") vs THIRD-PERSON PRONOUNS ("he" / "she"):
+   - When the story is told by a first-person narrator who is a character in the story (e.g. Nick Carraway, Jane Eyre, Katniss Everdeen):
+     * Narration, internal thoughts, and spoken words tagged with "I said", "I asked", "I replied", or "I urged" belong to `narrator`.
+     * Spoken dialogue tagged with "he said", "she said", "he replied", "she whispered", or "he muttered" belongs to the OTHER character in the scene, NEVER to `narrator`!
+     * NEVER confuse third-person speech ("he said") with the first-person narrator ("I").
+
+3. CONVERSATIONAL TURN-TAKING (DIALOGUE PING-PONG):
+   - In back-and-forth dialogue exchanges between two characters, speaking turns strictly ALTERNATE:
+     * Question -> Answer -> Follow-up -> Reply.
+     * Consecutive alternating dialogue lines cannot be spoken by the same character unless explicitly framed as an uninterrupted monologue.
+     * A character NEVER speaks both sides of an exchange or answers their own question!
+     * In conversational interjections or hesitant speech where Speaker B trails off (e.g. "Mr. — —"), a short subsequent response (e.g. "Carraway.") is Speaker A identifying himself, and the continuation ("Where have they got Jimmy?") returns to Speaker B.
+
+4. UNCAST INTERLOCUTORS & SERVICE CHARACTERS:
+   - Whenever a character speaks through a telephone, orders food, asks directions, or converses with an unnamed secondary character (telephone operator, waiter, cab driver, butler, clerk, nurse, stranger), DO NOT collapse both sides onto the caller!
+   - JIT-cast the interlocutor (e.g. "char_operator", "char_waiter", "char_butler") and register them in "new_characters".
+
+5. STRICT DIALOGUE PURITY (SPOKEN WORDS ONLY):
    - Dialogue lines MUST contain spoken words only (words audibly articulated from the character's mouth, typically in quotes).
    - Strip all author tags, speech verbs, and attribution clauses (e.g. "he said", "whispered Marcus", "I asked").
    - BAD: "Put the gun down," Marcus whispered, his hands trembling.
@@ -124,7 +141,7 @@ RULES:
      - Line 1: speaker: "char_marcus", emotion: "whisper", text: "Put the gun down."
      - Line 2: speaker: "narrator", emotion: "tense", text: "His hands were trembling."
 
-3. ACTION BEATS & PHYSICAL MOVEMENTS BELONG TO THE NARRATOR:
+6. ACTION BEATS & PHYSICAL MOVEMENTS BELONG TO THE NARRATOR:
    - A character speaker ID can ONLY be assigned to words spoken aloud in conversation.
    - Any physical action, movement, gesture, entrance/exit, or description of a character (even if their name is the subject of the sentence!) is DESCRIPTIVE NARRATION and MUST be assigned to "narrator".
    - A character voice actor must NEVER utter third-person sentences describing themselves or others!
@@ -133,18 +150,15 @@ RULES:
    - BAD: speaker: "char_tom", text: "Tom and Miss Baker with several feet of twilight between them strolled back into the library." (WRONG: Third-person action, must be narrator!)
    - GOOD: speaker: "narrator", text: "Tom and Miss Baker with several feet of twilight between them strolled back into the library."
 
-4. ACTING DIRECTION:
+7. ACTING DIRECTION:
    - emotion: 1 expressive acting instruction word (e.g. "tense", "whisper", "sarcastic", "arrogant", "warm", "mournful", "urgent", "flirtatious", "calm", "bored", "furious").
    - speed: float between 0.90 and 1.10 (0.95 for slow/deliberate/solemn; 1.0 for normal; 1.05 for hurried/agitated).
    - pause_after_ms: integer milliseconds of silence to follow the line (350-450ms for dialogue exchanges; 550-700ms after narrative descriptions or scene beats).
 
-5. DYNAMIC UNREGISTERED CHARACTERS:
-   - If a new character speaks who is NOT in the registered cast, use a slug like "char_speakername" as speaker, and list them in the "new_characters" array with their name, gender ("male"|"female"), and personality_traits.
-   - NEVER add a new character if they are already in the cast or if they are the narrator.
-
-6. RESPONSE FORMAT:
+8. RESPONSE FORMAT:
    Return ONLY a valid JSON object matching this schema:
 {{
+  "scene_characters_present": ["narrator", "char_tom"],
   "lines": [
     {{
       "speaker": "narrator",
@@ -180,6 +194,7 @@ RULES:
         cast_sheet: Optional[CastSheet] = None,
         chapter_index: int = 1,
         scene_index: int = 1,
+        previous_scene_context: Optional[str] = None,
     ) -> tuple[Screenplay, Optional[CastSheet]]:
         """
         Directs a raw scene chunk into a performance screenplay.
@@ -197,7 +212,13 @@ RULES:
             s_idx = scene_index
 
         system_prompt = self._build_system_prompt(cast_sheet)
-        user_prompt = f"Convert this scene into a dramatic screenplay JSON:\n\n\"\"\"\n{prose_text.strip()}\n\"\"\""
+        user_prompt = ""
+        if previous_scene_context and previous_scene_context.strip():
+            user_prompt += (
+                "[PREVIOUS SCENE CONTEXT (For character continuity and pronoun resolution only - DO NOT re-direct these lines)]:\n"
+                f"{previous_scene_context.strip()}\n\n"
+            )
+        user_prompt += f"Convert this scene into a dramatic screenplay JSON:\n\n\"\"\"\n{prose_text.strip()}\n\"\"\""
 
         response = self._call_with_retry([
             {"role": "system", "content": system_prompt},
@@ -360,10 +381,15 @@ RULES:
                 )
             )
 
+        raw_scene_chars = parsed.get("scene_characters_present", [])
+        if not isinstance(raw_scene_chars, list):
+            raw_scene_chars = []
+
         screenplay = Screenplay(
             chapter_index=ch_idx,
             scene_index=s_idx,
             lines=screenplay_lines,
+            scene_characters_present=[str(c) for c in raw_scene_chars],
         )
 
         return screenplay, cast_sheet

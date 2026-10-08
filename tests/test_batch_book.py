@@ -59,7 +59,7 @@ def test_produce_book_batch(monkeypatch, tmp_path: Path, mock_book, mock_cast):
     pipeline = DramaPipeline()
 
     # Mock director to avoid external API calls
-    def mock_direct(scene, cast_sheet=None, chapter_index=1, scene_index=1):
+    def mock_direct(scene, cast_sheet=None, chapter_index=1, scene_index=1, **kwargs):
         sp = Screenplay(
             chapter_index=chapter_index,
             scene_index=scene_index,
@@ -114,7 +114,7 @@ def test_produce_book_resume_skips_existing(monkeypatch, tmp_path: Path, mock_bo
     """Verifies that produce_book with resume=True skips already produced chapter files."""
     pipeline = DramaPipeline()
 
-    def mock_direct(scene, cast_sheet=None, chapter_index=1, scene_index=1):
+    def mock_direct(scene, cast_sheet=None, chapter_index=1, scene_index=1, **kwargs):
         return Screenplay(chapter_index=chapter_index, scene_index=scene_index, lines=[]), cast_sheet
 
     silence = AudioSegment.silent(duration=500)
