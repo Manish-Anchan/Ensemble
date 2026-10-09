@@ -43,10 +43,46 @@ def repair_hyphenation(text: str) -> str:
     return re.sub(r"(\b[A-Za-z]+)-\s*\n\s*([a-z]+)\b", r"\1\2", text)
 
 
+DIALOGUE_START_REGEX = re.compile(r"^[\x27\"\u2018\u201c\u2019\u201d]")
+TERMINAL_PUNCT_REGEX = re.compile(r"[\.?!,\x27\"\u2018\u201c\u2019\u201d—]\s*$")
+
+
+def join_lines_preserving_dialogue(lines: List[str]) -> List[str]:
+    """
+    Joins soft-wrapped lines in a paragraph with spaces, but preserves
+    dialogue turns (lines starting with quotes following punctuation)
+    as separate paragraphs.
+    """
+    if not lines:
+        return []
+
+    paras: List[str] = []
+    current_lines: List[str] = []
+
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+
+        if current_lines:
+            prev = current_lines[-1]
+            if DIALOGUE_START_REGEX.match(line_clean) and TERMINAL_PUNCT_REGEX.search(prev):
+                paras.append(re.sub(r"\s+", " ", " ".join(current_lines)).strip())
+                current_lines = [line_clean]
+                continue
+
+        current_lines.append(line_clean)
+
+    if current_lines:
+        paras.append(re.sub(r"\s+", " ", " ".join(current_lines)).strip())
+
+    return [p for p in paras if p]
+
+
 def unwrap_paragraphs(text: str) -> str:
     """
     Converts hard line breaks inside a paragraph into spaces while
-    preserving paragraph breaks (double newlines).
+    preserving paragraph breaks and distinct dialogue turns (double newlines).
     """
     # First normalize newlines to standard \n
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -56,17 +92,12 @@ def unwrap_paragraphs(text: str) -> str:
     cleaned_paragraphs = []
 
     for para in raw_paragraphs:
-        lines = para.split("\n")
-        # Strip leading/trailing whitespace on each line
-        stripped_lines = [line.strip() for line in lines if line.strip()]
-        if not stripped_lines:
+        lines = [line.strip() for line in para.split("\n") if line.strip()]
+        if not lines:
             continue
 
-        # Join lines in paragraph with a single space
-        joined_para = " ".join(stripped_lines)
-        # Collapse any internal multiple spaces
-        joined_para = re.sub(r"\s+", " ", joined_para)
-        cleaned_paragraphs.append(joined_para)
+        sub_paras = join_lines_preserving_dialogue(lines)
+        cleaned_paragraphs.extend(sub_paras)
 
     return "\n\n".join(cleaned_paragraphs)
 
@@ -132,16 +163,17 @@ def join_page_texts(pages: List[str]) -> str:
 
 def unwrap_block(block_text: str) -> str:
     """
-    Unwraps hard line breaks within a single block/paragraph into spaces,
-    after repairing hyphenation and normalizing typography.
+    Unwraps hard line breaks within a single block into spaces,
+    while preserving dialogue turn breaks (lines starting with quotes)
+    as distinct paragraphs separated by double newlines.
     """
     text = normalize_typography(block_text)
     text = repair_hyphenation(text)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return ""
-    joined = " ".join(lines)
-    return re.sub(r"\s+", " ", joined).strip()
+    paras = join_lines_preserving_dialogue(lines)
+    return "\n\n".join(paras)
 
 
 def merge_page_paragraphs(pages_paras: List[List[str]]) -> str:
@@ -152,22 +184,23 @@ def merge_page_paragraphs(pages_paras: List[List[str]]) -> str:
     combined: List[str] = []
     for page_paras in pages_paras:
         for para in page_paras:
-            p = para.strip()
-            if not p:
-                continue
-            if not combined:
-                combined.append(p)
-                continue
+            for sub_p in para.split("\n\n"):
+                p = sub_p.strip()
+                if not p:
+                    continue
+                if not combined:
+                    combined.append(p)
+                    continue
 
-            prev = combined[-1]
-            ends_with_terminal = bool(re.search(r'[.?!]["\']?\s*$', prev))
-            starts_with_lowercase = p[0].islower()
+                prev = combined[-1]
+                ends_with_terminal = bool(re.search(r'[.?!]["\']?\s*$', prev))
+                starts_with_lowercase = p[0].islower()
 
-            if not ends_with_terminal or starts_with_lowercase:
-                # Merge into previous paragraph
-                combined[-1] = prev + " " + p
-            else:
-                combined.append(p)
+                if not ends_with_terminal or starts_with_lowercase:
+                    # Merge into previous paragraph
+                    combined[-1] = prev + " " + p
+                else:
+                    combined.append(p)
 
     return "\n\n".join(combined)
 

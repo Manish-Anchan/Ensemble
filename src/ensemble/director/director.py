@@ -155,7 +155,12 @@ RULES:
    - speed: float between 0.90 and 1.10 (0.95 for slow/deliberate/solemn; 1.0 for normal; 1.05 for hurried/agitated).
    - pause_after_ms: integer milliseconds of silence to follow the line (350-450ms for dialogue exchanges; 550-700ms after narrative descriptions or scene beats).
 
-8. RESPONSE FORMAT:
+8. DISTINCT QUOTES MUST BE SEPARATE SCREENPLAY LINES:
+   - If a passage of text contains multiple distinct dialogue quotes (even if they appear next to each other in the same paragraph, e.g. "'Do they miss me?' she cried ecstatically. 'The whole town is desolate...'"), NEVER merge them into a single screenplay line or speaker!
+   - Split each quote into its own separate line and attribute each to its proper speaker.
+   - Dialogue quotes that represent an exchange or reply (e.g. Daisy asks "Do they miss me?" -> Nick replies "The whole town is desolate...") MUST be split and assigned to their respective speakers according to conversational turn-taking.
+
+9. RESPONSE FORMAT:
    Return ONLY a valid JSON object matching this schema:
 {{
   "scene_characters_present": ["narrator", "char_tom"],

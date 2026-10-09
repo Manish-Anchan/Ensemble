@@ -200,3 +200,40 @@ def test_drop_cap_stitching():
     assert stitch_drop_cap("I", "couldn't sleep all night") == "I couldn't sleep all night"
     assert stitch_drop_cap("I", "remember the first time") == "I remember the first time"
     assert stitch_drop_cap("A", "dark and stormy night") == "A dark and stormy night"
+
+
+def test_dialogue_turn_preservation_in_unwrap():
+    """
+    Verifies that unwrap_block and unwrap_paragraphs join soft-wrapped prose
+    while preserving dialogue turns (quotes on separate lines) as distinct paragraphs.
+    """
+    from ensemble.parser.cleaner import unwrap_block, unwrap_paragraphs
+
+    # Block with soft-wrapped dialogue and multiple speakers
+    raw_block = """‘Do they miss me?’ she cried ecstatically.
+‘The whole town is desolate. All the cars have the left rear
+wheel painted black as a mourning wreath.’
+‘How gorgeous! Let’s go back, Tom. Tomorrow!’"""
+
+    unwrapped = unwrap_block(raw_block)
+    paras = unwrapped.split("\n\n")
+
+    assert len(paras) == 3
+    assert paras[0] == "'Do they miss me?' she cried ecstatically."
+    # Soft wrap joined
+    assert paras[1] == "'The whole town is desolate. All the cars have the left rear wheel painted black as a mourning wreath.'"
+    assert paras[2] == "'How gorgeous! Let's go back, Tom. Tomorrow!'"
+
+    # Verify unwrap_paragraphs behaves identically
+    raw_paras = """This is normal soft-wrapped prose
+that spans multiple lines in print.
+
+‘I’d like to.’
+‘She’s asleep. She’s two years old.’"""
+
+    res = unwrap_paragraphs(raw_paras)
+    res_paras = res.split("\n\n")
+    assert len(res_paras) == 3
+    assert res_paras[0] == "This is normal soft-wrapped prose that spans multiple lines in print."
+    assert res_paras[1] == "‘I’d like to.’"
+    assert res_paras[2] == "‘She’s asleep. She’s two years old.’"

@@ -102,15 +102,24 @@ class PDFBookExtractor:
         page_paras = []
         # Multi-character roman numerals (e.g. iv, xiv, xii) or digits, never lone letters like 'I' or 'A'
         page_num_regex = re.compile(r"^\s*[-—~]?\s*(\d+|[ivxlcdm]{2,})\s*[-—~]?\s*$", re.IGNORECASE)
+        footer_watermark_regex = re.compile(
+            r"(?:Free\s+eBooks?\s+at\s+Planet\s+eBook\.com|Standard\s+Ebooks|Project\s+Gutenberg)",
+            re.IGNORECASE
+        )
         drop_cap = ""
 
-        for b in blocks:
+        # Sort blocks by vertical position y0 (b[1]) to guarantee natural reading order
+        sorted_blocks = sorted(blocks, key=lambda b: (round(b[1], 1), round(b[0], 1)))
+
+        for b in sorted_blocks:
             if b[6] != 0:
                 continue
             raw_text = b[4].strip()
             if not raw_text:
                 continue
             if page_num_regex.match(raw_text):
+                continue
+            if footer_watermark_regex.search(raw_text):
                 continue
             if recurring_patterns and raw_text.lower() in recurring_patterns:
                 continue
@@ -128,7 +137,10 @@ class PDFBookExtractor:
                 unwrapped = stitch_drop_cap(drop_cap, unwrapped)
                 drop_cap = ""
 
-            page_paras.append(unwrapped)
+            for sub_p in unwrapped.split("\n\n"):
+                sub_clean = sub_p.strip()
+                if sub_clean:
+                    page_paras.append(sub_clean)
 
         return page_paras
 

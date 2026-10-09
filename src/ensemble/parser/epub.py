@@ -64,7 +64,8 @@ class EPUBBookExtractor:
 
                 pages_paras = []
                 for p_num in range(p_start_0, p_end_0):
-                    blocks = doc[p_num].get_text("blocks")
+                    raw_blocks = doc[p_num].get_text("blocks")
+                    blocks = sorted(raw_blocks, key=lambda b: (round(b[1], 1), round(b[0], 1)))
                     paras = [unwrap_block(b[4]) for b in blocks if b[6] == 0 and b[4].strip()]
                     if paras:
                         pages_paras.append(paras)
