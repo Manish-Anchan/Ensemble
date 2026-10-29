@@ -138,20 +138,29 @@ async def list_books():
             if f.suffix.lower() in (".pdf", ".epub"):
                 stem = f.stem
                 cast_path = find_cast_sheet(stem)
+                cached = _books_cache.get(f.name)
+                total_chapters = len(cached.chapters) if cached else None
+                total_words = cached.total_words if cached else None
+                author = cached.author if cached else None
+                title = cached.title if (cached and cached.title) else stem.replace("_", " ").title()
+
                 books.append({
                     "filename": f.name,
-                    "title": stem.replace("_", " ").title(),
+                    "title": title,
+                    "author": author or "Classic Literature",
                     "size_bytes": f.stat().st_size,
                     "format": f.suffix.lower().lstrip("."),
                     "has_cast_sheet": cast_path is not None,
                     "cast_sheet_path": str(cast_path.relative_to(PROJECT_ROOT)) if cast_path else None,
+                    "total_chapters": total_chapters,
+                    "total_words": total_words,
                 })
     return {"books": books}
 
 
 @app.post("/api/upload")
 async def upload_book(file: UploadFile = File(...)):
-    """Uploads a PDF or EPUB book to the samples directory."""
+    """Uploads a PDF or EPUB book to the samples directory and pre-caches it."""
     ext = Path(file.filename).suffix.lower()
     if ext not in (".pdf", ".epub"):
         raise HTTPException(status_code=400, detail="Only .pdf and .epub files are supported.")
@@ -166,8 +175,25 @@ async def upload_book(file: UploadFile = File(...)):
         if k.startswith(file.filename):
             del _books_cache[k]
 
+    # Pre-parse book to cache and return instant metadata
+    try:
+        book = get_cached_book(file.filename)
+        title = book.title or file.filename.replace("_", " ").title()
+        total_chapters = len(book.chapters)
+        total_words = book.total_words
+        author = book.author or "Classic Literature"
+    except Exception as e:
+        title = Path(file.filename).stem.replace("_", " ").title()
+        total_chapters = 0
+        total_words = 0
+        author = "Classic Literature"
+
     return {
         "filename": file.filename,
+        "title": title,
+        "author": author,
+        "total_chapters": total_chapters,
+        "total_words": total_words,
         "size_bytes": len(content),
         "status": "uploaded",
     }

@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+from typing import Optional
 from ensemble.parser.models import Book
 from ensemble.parser.pdf import PDFBookExtractor
 from ensemble.parser.epub import EPUBBookExtractor
@@ -8,11 +10,13 @@ def load_book(
     file_path: str | Path,
     header_margin_pt: float = 45.0,
     footer_margin_pt: float = 45.0,
-    target_scene_words: int = 600,
+    target_scene_words: Optional[int] = None,
 ) -> Book:
     """
     Unified entry point for loading and parsing fiction books (PDF / EPUB).
     """
+    if target_scene_words is None:
+        target_scene_words = int(os.getenv("SCENE_TARGET_WORDS", "1000"))
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"Book file does not exist: {path}")

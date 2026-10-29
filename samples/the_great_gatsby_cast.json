@@ -8,65 +8,20 @@
       "age_group": "adult",
       "role": "narrator",
       "personality_traits": [
-        "literary",
-        "measured",
         "observant",
+        "tolerant",
         "reflective",
-        "reserved",
-        "tolerant"
+        "reserved"
       ],
       "aliases": [
-        "Carraway",
         "Nick",
+        "Carraway",
+        "narrator",
         "char_nick",
-        "char_nick_carraway",
-        "narrator"
+        "char_nick_carraway"
       ],
       "voice_id": "am_michael",
-      "voice_rationale": "Steady, warm, and articulate American voice fits the thoughtful, middle-class narrator who observes with a mix of judgment and tolerance."
-    },
-    "char_gatsby": {
-      "id": "char_gatsby",
-      "name": "Jay Gatsby",
-      "gender": "male",
-      "age_group": "adult",
-      "role": "protagonist",
-      "personality_traits": [
-        "charming",
-        "enigmatic",
-        "gorgeous",
-        "hopeful",
-        "mysterious",
-        "romantic",
-        "wealthy"
-      ],
-      "aliases": [
-        "Gatsby",
-        "Mr. Gatsby"
-      ],
-      "voice_id": "am_echo",
-      "voice_rationale": "Smooth, cool, and charming mid-tone captures the 'gorgeous' and heightened sensitivity of Gatsby, distinct from the narrator's steadiness."
-    },
-    "char_father": {
-      "id": "char_father",
-      "name": "Nick's Father",
-      "gender": "male",
-      "age_group": "elderly",
-      "role": "supporting",
-      "personality_traits": [
-        "cautious",
-        "communicative",
-        "reserved",
-        "snobbish",
-        "traditional",
-        "wise"
-      ],
-      "aliases": [
-        "Dad",
-        "Father"
-      ],
-      "voice_id": "am_santa",
-      "voice_rationale": "Warm, hearty, and aged resonant voice suits the wise, middle-western patriarch offering life advice."
+      "voice_rationale": "Steady, warm, and articulate voice suits the thoughtful, literary, and observant nature of the first-person narrator."
     },
     "char_tom": {
       "id": "char_tom",
@@ -77,8 +32,8 @@
       "personality_traits": [
         "arrogant",
         "aggressive",
-        "physically imposing",
-        "contemptuous"
+        "domineering",
+        "wealthy"
       ],
       "aliases": [
         "Tom",
@@ -86,7 +41,7 @@
         "Mr. Buchanan"
       ],
       "voice_id": "am_adam",
-      "voice_rationale": "Deep, authoritative, and slightly gruff voice matches the description of Tom's 'gruff husky tenor' and his aggressive, dominant demeanor."
+      "voice_rationale": "Deep, authoritative, and slightly gruff tone captures Tom's physical imposing nature and his 'gruff husky tenor' speaking voice."
     },
     "char_daisy": {
       "id": "char_daisy",
@@ -95,38 +50,36 @@
       "age_group": "adult",
       "role": "supporting",
       "personality_traits": [
-        "elegant",
+        "charming",
         "melancholic",
-        "superficial",
-        "wistful"
+        "elegant",
+        "coquettish"
       ],
       "aliases": [
         "Daisy",
         "Mrs. Buchanan"
       ],
       "voice_id": "af_nicole",
-      "voice_rationale": "Gentle, breathy, and thoughtful voice captures Daisy's romantic vulnerability and the 'wistfulness' described in the narrative."
+      "voice_rationale": "Gentle, breathy, and thoughtful voice matches Daisy's 'low, thrilling voice' and her underlying sadness and allure."
     },
-    "char_jordan": {
-      "id": "char_jordan",
+    "char_baker": {
+      "id": "char_baker",
       "name": "Jordan Baker",
       "gender": "female",
-      "age_group": "adult",
+      "age_group": "young",
       "role": "supporting",
       "personality_traits": [
-        "athletic",
-        "cynical",
         "aloof",
+        "discontented",
         "slender",
-        "bored"
+        "polite"
       ],
       "aliases": [
         "Jordan",
-        "Miss Baker",
-        "Baker"
+        "Miss Baker"
       ],
-      "voice_id": "af_bella",
-      "voice_rationale": "Crisp, athletic, and slightly detached modern American female voice fits the cynical professional golfer."
+      "voice_id": "af_kore",
+      "voice_rationale": "Quiet, introspective, and serious tone fits Jordan's 'wan, charming discontented face' and her detached, observant demeanor."
     }
   },
   "narrator_id": "narrator"

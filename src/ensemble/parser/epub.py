@@ -1,5 +1,6 @@
+import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import pymupdf
 
 from ensemble.parser.models import Book, Chapter
@@ -13,8 +14,8 @@ class EPUBBookExtractor:
     Extracts structured chapters via TOC outlines and segments into scenes.
     """
 
-    def __init__(self, target_scene_words: int = 600):
-        self.target_scene_words = target_scene_words
+    def __init__(self, target_scene_words: Optional[int] = None):
+        self.target_scene_words = target_scene_words if target_scene_words is not None else int(os.getenv("SCENE_TARGET_WORDS", "1000"))
 
     def extract(self, file_path: str | Path) -> Book:
         path = Path(file_path)

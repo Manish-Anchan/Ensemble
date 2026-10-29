@@ -31,7 +31,7 @@ def main():
     parser.add_argument(
         "--target-words",
         type=int,
-        default=600,
+        default=1000,
         help="Target scene chunk word count",
     )
 

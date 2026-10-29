@@ -338,3 +338,170 @@ def test_previous_scene_context_and_presence(monkeypatch):
     assert len(screenplay.lines) == 2
     assert screenplay.lines[0].speaker == "narrator"
     assert screenplay.lines[1].speaker == "char_gatz"
+
+
+def test_dynamic_scene_split_on_length(monkeypatch):
+    """Verifies that an overflowing scene with finish_reason='length' dynamically splits into 2 parts and combines cleanly."""
+    director = SceneDirector(api_key="mock-key")
+
+    para1 = "The afternoon was dark and cloudy. " * 30
+    para2 = "Tom stood by the mantelpiece looking sullen. " * 30
+    full_prose = f"{para1}\n\n{para2}"
+
+    call_count = 0
+    captured_calls = []
+
+    def mock_call(messages):
+        nonlocal call_count
+        call_count += 1
+        captured_calls.append(messages)
+
+        if call_count == 1:
+            # First full call runs out of tokens
+            return type(
+                "MockResp",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "Choice",
+                            (),
+                            {
+                                "finish_reason": "length",
+                                "message": type("Msg", (), {"content": json.dumps({"lines": [{"speaker": "narrator", "text": "Part 1 truncated"}]})})()
+                            }
+                        )()
+                    ]
+                },
+            )()
+        elif call_count == 2:
+            # Sub-call for Part 1
+            return type(
+                "MockResp",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "Choice",
+                            (),
+                            {
+                                "finish_reason": "stop",
+                                "message": type("Msg", (), {"content": json.dumps({
+                                    "scene_characters_present": ["narrator"],
+                                    "lines": [
+                                        {"speaker": "narrator", "text": "The afternoon was dark."},
+                                        {"speaker": "narrator", "text": "The clouds gathered."}
+                                    ]
+                                })})()
+                            }
+                        )()
+                    ]
+                },
+            )()
+        else:
+            # Sub-call for Part 2 (includes context from Part 1)
+            return type(
+                "MockResp",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "Choice",
+                            (),
+                            {
+                                "finish_reason": "stop",
+                                "message": type("Msg", (), {"content": json.dumps({
+                                    "scene_characters_present": ["char_tom"],
+                                    "lines": [
+                                        {"speaker": "char_tom", "text": "What do you want?"}
+                                    ]
+                                })})()
+                            }
+                        )()
+                    ]
+                },
+            )()
+
+    monkeypatch.setattr(director, "_call_with_retry", mock_call)
+
+    screenplay, _ = director.direct_scene(
+        scene=full_prose,
+        chapter_index=1,
+        scene_index=5,
+    )
+
+    assert call_count == 3  # 1 initial + 2 sub-part calls
+    assert len(screenplay.lines) == 3
+    assert screenplay.lines[0].text == "The afternoon was dark."
+    assert screenplay.lines[1].text == "The clouds gathered."
+    assert screenplay.lines[2].speaker == "char_tom"
+    assert screenplay.lines[2].text == "What do you want?"
+    assert screenplay.scene_characters_present == ["narrator", "char_tom"]
+
+
+def test_scene_director_new_characters_as_strings(monkeypatch):
+    """Verifies that SceneDirector handles new_characters as plain strings or char_ slugs without crashing."""
+    director = SceneDirector(api_key="mock-key")
+
+    mock_llm_response = {
+        "scene_characters_present": ["narrator", "char_waiter"],
+        "lines": [
+            {
+                "speaker": "narrator",
+                "text": "The waiter stepped forward.",
+                "emotion": "measured",
+            },
+            {
+                "speaker": "char_waiter",
+                "text": "Can I take your order, sir?",
+                "emotion": "polite",
+            }
+        ],
+        "new_characters": [
+            "char_waiter",
+            "Mrs. Wilson"
+        ]
+    }
+
+    monkeypatch.setattr(
+        director,
+        "_call_with_retry",
+        lambda messages: type(
+            "MockResp",
+            (),
+            {
+                "choices": [
+                    type("Choice", (), {"message": type("Msg", (), {"content": json.dumps(mock_llm_response)})()})()
+                ]
+            },
+        )(),
+    )
+
+    cast_sheet = CastSheet(
+        book_title="The Great Gatsby",
+        characters={
+            "narrator": CharacterProfile(
+                id="narrator",
+                name="Nick Carraway",
+                gender="male",
+                age_group="adult",
+                role="narrator",
+                personality_traits=["observant"],
+                aliases=["Nick"],
+                voice_id="am_michael"
+            )
+        }
+    )
+
+    screenplay, updated_cast = director.direct_scene(
+        scene="The waiter stepped forward. Can I take your order, sir?",
+        cast_sheet=cast_sheet,
+        chapter_index=1,
+        scene_index=1,
+    )
+
+    assert len(screenplay.lines) == 2
+    assert "char_waiter" in updated_cast.characters
+    assert updated_cast.characters["char_waiter"].name == "Waiter"
+    assert "char_mrs._wilson" in updated_cast.characters or "char_mrs_wilson" in updated_cast.characters
+    assert screenplay.lines[1].speaker == "char_waiter"

@@ -10,7 +10,13 @@ import { StudioAudioEngine, type LineMetadata } from './lib/audioEngine';
 interface Book {
   filename: string;
   title: string;
+  author?: string;
   format: string;
+  size_bytes?: number;
+  has_cast_sheet?: boolean;
+  cast_sheet_path?: string | null;
+  total_chapters?: number | null;
+  total_words?: number | null;
 }
 
 interface Chapter {
@@ -207,6 +213,16 @@ export function App() {
     setCurrentBook(filename);
     await loadBookChapters(filename);
     await loadCast(filename);
+  };
+
+  const refreshBooks = async () => {
+    try {
+      const resp = await fetch('/api/books');
+      const data = await resp.json();
+      setBooks(data.books || []);
+    } catch (err) {
+      console.error('Failed to refresh books:', err);
+    }
   };
 
   const handleChapterChange = (chapterIndex: number) => {
@@ -449,7 +465,19 @@ export function App() {
 
         {activeTab === 'library' && (
           <div className="p-6">
-            <LibraryView />
+            <LibraryView
+              books={books}
+              currentBook={currentBook}
+              onSelectBook={async (filename) => {
+                await handleBookChange(filename);
+                setActiveTab('stage');
+              }}
+              onOpenCasting={async (filename) => {
+                await handleBookChange(filename);
+                setActiveTab('casting');
+              }}
+              onRefreshBooks={refreshBooks}
+            />
           </div>
         )}
       </main>

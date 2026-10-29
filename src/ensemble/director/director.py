@@ -2,7 +2,7 @@ import os
 import json
 import time
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple, Union
 from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError, APIStatusError
@@ -12,6 +12,9 @@ from ensemble.producer.models import CastSheet, CharacterProfile
 from ensemble.producer.catalog import KOKORO_VOICE_CATALOG
 from ensemble.director.models import ScreenplayLine, Screenplay
 
+_project_env = Path(__file__).resolve().parents[3] / ".env"
+if _project_env.exists():
+    load_dotenv(dotenv_path=_project_env)
 load_dotenv()
 
 
@@ -40,10 +43,10 @@ class SceneDirector:
 
     def _call_with_retry(self, messages: List[Dict[str, str]], max_retries: int = 3):
         """Executes LLM chat completion with backoff retry when rate limits or server spikes occur."""
-        is_gpt_oss = "gpt-oss" in self.model or "120b" in self.model or "20b" in self.model
-        cur_max_tokens = 4000 if is_gpt_oss else 1000
+        is_gpt_oss = "gpt-oss" in self.model.lower()
         backup_keys = [k for k in [os.getenv("PRODUCER_API_KEY"), os.getenv("LLM_API_KEY")] if k and k != self.api_key]
         active_client = self.client
+        cur_max_tokens = None
 
         for attempt in range(max_retries + 1):
             try:
@@ -52,50 +55,100 @@ class SceneDirector:
                     "messages": messages,
                     "temperature": 0.2,
                     "response_format": {"type": "json_object"},
-                    "max_tokens": cur_max_tokens,
                 }
+                if cur_max_tokens is not None:
+                    kwargs["max_tokens"] = cur_max_tokens
                 if is_gpt_oss:
                     kwargs["extra_body"] = {"reasoning_effort": "low"}
                 return active_client.chat.completions.create(**kwargs)
             except (RateLimitError, APIStatusError) as e:
                 err_msg = str(e)
                 status = getattr(e, "status_code", 0)
-                is_otpm = "reduce max_tokens" in err_msg or "output tokens per minute" in err_msg or "OTPM" in err_msg
                 is_rate_limit = (
                     isinstance(e, RateLimitError)
                     or "rate_limit_exceeded" in err_msg
                     or "tokens per minute" in err_msg
                     or "TPM" in err_msg
+                    or "requests per" in err_msg
                     or status == 429
                 )
                 is_server_busy = status in (500, 502, 503, 504) or "high demand" in err_msg or "UNAVAILABLE" in err_msg
 
-                if (is_rate_limit or is_server_busy or is_otpm) and attempt < max_retries:
-                    if is_otpm:
-                        limit_match = re.search(r"Limit\s+(\d+)", err_msg, re.IGNORECASE)
-                        if limit_match:
-                            cur_max_tokens = max(500, int(limit_match.group(1)) - 10)
-                        else:
-                            cur_max_tokens = max(500, cur_max_tokens - 150)
-                        wait_sec = 2.0
-                        print(f"   ⏳ Provider OTPM limit exceeded. Adjusted max_tokens to {cur_max_tokens} and retrying in {wait_sec:.1f}s...")
+                if (is_rate_limit or is_server_busy) and attempt < max_retries:
+                    # Switch to backup Groq key if available
+                    if is_rate_limit and backup_keys:
+                        alt_key = backup_keys.pop(0)
+                        active_client = OpenAI(api_key=alt_key, base_url=self.base_url)
+                        print(f"   🔄 Switched to backup LLM API key after rate limit.")
+                        time.sleep(1.0)
+                        continue
+
+                    match = re.search(r"try again in ([\d\.]+)s", err_msg)
+                    if match:
+                        wait_sec = float(match.group(1)) + 1.5
                     elif is_server_busy:
                         wait_sec = 2.5 * (attempt + 1)
-                        print(f"   ⏳ Provider experiencing temporary high demand ({status or 503}). Retrying in {wait_sec:.1f}s...")
                     else:
-                        match = re.search(r"try again in ([\d\.]+)s", err_msg)
-                        wait_sec = float(match.group(1)) + 1.5 if match else (6.0 * (attempt + 1))
-                        # If we have a backup API key, switch immediately
-                        if backup_keys:
-                            alt_key = backup_keys.pop(0)
-                            active_client = OpenAI(api_key=alt_key, base_url=self.base_url)
-                            print(f"   🔄 Switched to backup LLM API key after rate limit.")
-                            time.sleep(1.0)
-                            continue
-                        print(f"   ⏳ Director rate limit reached. Waiting {wait_sec:.1f}s before retry...")
+                        wait_sec = 6.0 * (attempt + 1)
+
+                    if "tokens per minute" in err_msg or "TPM" in err_msg or "OTPM" in err_msg or "max_tokens" in err_msg:
+                        is_gemini = "gemini" in self.model.lower()
+                        max_cap = 8192 if is_gemini else 1000
+                        lim_match = re.search(r"Limit\s+(\d+)", err_msg, re.IGNORECASE)
+                        if lim_match:
+                            lim_val = int(lim_match.group(1))
+                            cur_max_tokens = min(max_cap, lim_val)
+                        else:
+                            cur_max_tokens = max_cap
+                        print(f"   ⏳ Provider enforced token limit. Clamped max_tokens to {cur_max_tokens}.")
+
+                    if is_server_busy:
+                        print(f"   ⏳ Provider experiencing temporary high demand ({status or 503}). Retrying in {wait_sec:.1f}s (attempt {attempt + 1}/{max_retries})...")
+                    else:
+                        print(f"   ⏳ Director rate limit reached. Waiting {wait_sec:.1f}s before retry (attempt {attempt + 1}/{max_retries})...")
+
                     time.sleep(wait_sec)
                     continue
                 raise e
+
+    def _split_prose_in_half(self, prose_text: str) -> Tuple[str, str]:
+        """
+        Splits scene prose into two balanced parts at the nearest paragraph boundary
+        (or sentence boundary) closest to the 50% word count mark.
+        Preserves complete paragraphs and narrative flow without cutting mid-sentence.
+        """
+        paras = [p.strip() for p in prose_text.split("\n\n") if p.strip()]
+        if len(paras) <= 1:
+            paras = [p.strip() for p in prose_text.split("\n") if p.strip()]
+
+        if len(paras) <= 1:
+            sentences = re.split(r"(?<=[.!?])\s+", prose_text)
+            total_words = sum(len(s.split()) for s in sentences)
+            half_words = total_words / 2
+            words_so_far = 0
+            split_idx = 1
+            for i, s in enumerate(sentences):
+                w = len(s.split())
+                if words_so_far + w >= half_words:
+                    split_idx = max(1, i if (half_words - words_so_far) < (words_so_far + w - half_words) else i + 1)
+                    break
+                words_so_far += w
+            return " ".join(sentences[:split_idx]), " ".join(sentences[split_idx:])
+
+        total_words = sum(len(p.split()) for p in paras)
+        half_words = total_words / 2
+        words_so_far = 0
+        split_idx = 1
+        for i, p in enumerate(paras):
+            w = len(p.split())
+            if words_so_far + w >= half_words:
+                split_idx = max(1, i if (half_words - words_so_far) < (words_so_far + w - half_words) else i + 1)
+                break
+            words_so_far += w
+
+        part1 = "\n\n".join(paras[:split_idx])
+        part2 = "\n\n".join(paras[split_idx:])
+        return part1, part2
 
     def _build_system_prompt(self, cast_sheet: Optional[CastSheet] = None) -> str:
         cast_list_str = ""
@@ -160,7 +213,15 @@ RULES:
    - Split each quote into its own separate line and attribute each to its proper speaker.
    - Dialogue quotes that represent an exchange or reply (e.g. Daisy asks "Do they miss me?" -> Nick replies "The whole town is desolate...") MUST be split and assigned to their respective speakers according to conversational turn-taking.
 
-9. RESPONSE FORMAT:
+9. STRICT FULL-TEXT AUDIO DRAMA FIDELITY (NO SKIPPING OR CONDENSING):
+   - This is an UNABRIDGED audio drama performance. You MUST preserve and adapt the FULL story without skipping or condensing.
+   - ALL sentences and paragraphs from the source text must be converted sequentially into screenplay lines:
+     * Spoken dialogue (words audibly spoken aloud in conversation) -> assigned to the respective character ID.
+     * Narration, internal thoughts, background exposition, descriptions of places, and character reflections -> assigned to "narrator".
+   - NEVER summarize, skip, condense, or omit ANY paragraphs.
+   - A 1,000-word scene must produce a complete screenplay representing the entire text from the very first sentence to the very last sentence. Every paragraph must be heard by the listener.
+
+10. RESPONSE FORMAT:
    Return ONLY a valid JSON object matching this schema:
 {{
   "scene_characters_present": ["narrator", "char_tom"],
@@ -200,6 +261,7 @@ RULES:
         chapter_index: int = 1,
         scene_index: int = 1,
         previous_scene_context: Optional[str] = None,
+        _allow_split: bool = True,
     ) -> tuple[Screenplay, Optional[CastSheet]]:
         """
         Directs a raw scene chunk into a performance screenplay.
@@ -223,14 +285,16 @@ RULES:
                 "[PREVIOUS SCENE CONTEXT (For character continuity and pronoun resolution only - DO NOT re-direct these lines)]:\n"
                 f"{previous_scene_context.strip()}\n\n"
             )
-        user_prompt += f"Convert this scene into a dramatic screenplay JSON:\n\n\"\"\"\n{prose_text.strip()}\n\"\"\""
+        user_prompt += f"Convert this ENTIRE scene into an unabridged audio drama screenplay without skipping or summarizing ANY text:\n\n\"\"\"\n{prose_text.strip()}\n\"\"\""
 
         response = self._call_with_retry([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ])
 
-        raw_content = response.choices[0].message.content or "{}"
+        choice = response.choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        raw_content = choice.message.content or "{}"
         try:
             parsed = json.loads(raw_content)
         except json.JSONDecodeError:
@@ -248,47 +312,124 @@ RULES:
         if not raw_lines and isinstance(parsed, list):
             raw_lines = parsed
 
+        # Dynamic 2-Way Scene Split Fallback:
+        # If the scene hit output token limits (finish_reason == "length") or truncated JSON (0 lines parsed
+        # for a substantial scene > 250 words), split the scene into 2 balanced parts and direct each part.
+        scene_word_count = len(prose_text.split())
+        if _allow_split and scene_word_count > 250 and (finish_reason == "length" or not raw_lines):
+            print(f"   ✂️ Scene {s_idx} hit token limit ({scene_word_count} words, finish_reason={finish_reason}). Dynamically splitting into 2 parts to preserve full context...")
+            part1_text, part2_text = self._split_prose_in_half(prose_text)
+
+            # Direct Part 1
+            sp1, cast_sheet = self.direct_scene(
+                scene=part1_text,
+                cast_sheet=cast_sheet,
+                chapter_index=ch_idx,
+                scene_index=s_idx,
+                previous_scene_context=previous_scene_context,
+                _allow_split=False,
+            )
+
+            # Gentle pacing interval between split parts for provider rate limits
+            time.sleep(1.0)
+
+            # Prepare context handoff for Part 2 from the conclusion of Part 1
+            if sp1.lines:
+                handoff_lines = "\n".join([f"{l.speaker}: {l.text}" for l in sp1.lines[-3:]])
+                part2_context = f"[PREVIOUS SCENE CONTEXT (Part 1 of this scene just concluded with)]:\n{handoff_lines}"
+            else:
+                part2_context = previous_scene_context
+
+            # Direct Part 2
+            sp2, cast_sheet = self.direct_scene(
+                scene=part2_text,
+                cast_sheet=cast_sheet,
+                chapter_index=ch_idx,
+                scene_index=s_idx,
+                previous_scene_context=part2_context,
+                _allow_split=False,
+            )
+
+            # Combine lines and unique characters present
+            combined_lines = sp1.lines + sp2.lines
+            combined_chars = list(dict.fromkeys(sp1.scene_characters_present + sp2.scene_characters_present))
+
+            combined_screenplay = Screenplay(
+                chapter_index=ch_idx,
+                scene_index=s_idx,
+                lines=combined_lines,
+                scene_characters_present=combined_chars,
+            )
+            print(f"   ✨ Dynamic split resolved Scene {s_idx}: {len(sp1.lines)} + {len(sp2.lines)} = {len(combined_lines)} lines with full character attribution.")
+            return combined_screenplay, cast_sheet
+
         # Dynamic Character Registration (JIT Casting)
         new_chars = parsed.get("new_characters", [])
-        if new_chars and cast_sheet:
+        if new_chars and cast_sheet and isinstance(new_chars, list):
             used_voices = {c.voice_id for c in cast_sheet.characters.values()}
             for nc in new_chars:
-                name = nc.get("name", "").strip()
+                if isinstance(nc, dict):
+                    name = nc.get("name", "").strip() or nc.get("id", "").strip()
+                    gender = str(nc.get("gender", "male")).lower()
+                    age_group = str(nc.get("age_group", "adult"))
+                    role = str(nc.get("role", "supporting"))
+                    traits = nc.get("personality_traits", [])
+                    personality_traits = traits if isinstance(traits, list) else [str(traits)]
+                elif isinstance(nc, str):
+                    name = nc.strip()
+                    gender = "male"
+                    age_group = "adult"
+                    role = "supporting"
+                    personality_traits = []
+                else:
+                    continue
+
                 if not name:
                     continue
-                char_slug = f"char_{name.lower().replace(' ', '_')}"
+
+                # Strip char_ prefix if present to derive clean human-readable name
+                clean_name = name
+                if clean_name.lower().startswith("char_"):
+                    clean_name = clean_name[5:].replace("_", " ").title()
+
+                char_slug = name.lower() if name.lower().startswith("char_") else f"char_{name.lower().replace(' ', '_')}"
                 if char_slug in cast_sheet.characters:
                     continue
 
                 # Check if this character already matches an existing character or narrator by name/alias
-                existing_char = cast_sheet.get_character_for_speaker(name) or cast_sheet.get_character_for_speaker(char_slug)
+                existing_char = (
+                    cast_sheet.get_character_for_speaker(name)
+                    or cast_sheet.get_character_for_speaker(char_slug)
+                    or cast_sheet.get_character_for_speaker(clean_name)
+                )
                 if existing_char:
                     # Link alias so char_slug resolves to the existing character
                     if char_slug not in cast_sheet.characters:
                         cast_sheet.characters[char_slug] = existing_char
                     continue
 
-                gender = nc.get("gender", "male").lower()
                 voice_id = self._pick_unused_voice(gender, used_voices, cast_sheet.default_narrator_voice)
                 used_voices.add(voice_id)
 
                 profile = CharacterProfile(
                     id=char_slug,
-                    name=name,
+                    name=clean_name,
                     gender=gender,
-                    age_group=nc.get("age_group", "adult"),
-                    role=nc.get("role", "supporting"),
-                    personality_traits=nc.get("personality_traits", []),
-                    aliases=[name],
+                    age_group=age_group,
+                    role=role,
+                    personality_traits=personality_traits,
+                    aliases=[clean_name, name],
                     voice_id=voice_id,
                     voice_rationale=f"Dynamically cast during Scene {s_idx} direction."
                 )
                 cast_sheet.characters[char_slug] = profile
-                print(f"   🎭 JIT Casting: Discovered '{name}' in Scene {s_idx} -> Assigned voice '{voice_id}'")
+                print(f"   🎭 JIT Casting: Discovered '{clean_name}' ({char_slug}) in Scene {s_idx} -> Assigned voice '{voice_id}'")
 
         # Map and sanitize lines
         screenplay_lines: List[ScreenplayLine] = []
         for d in raw_lines:
+            if not isinstance(d, dict):
+                continue
             text = d.get("text", "").strip()
             if not text:
                 continue
@@ -347,11 +488,14 @@ RULES:
                     clean_name = spk.replace("char_", "").replace("_", " ").title()
 
                     fem_hints = ["miss", "mrs", "ms", "lady", "girl", "woman", "daisy", "jordan", "baker", "catherine", "myrtle", "madam"]
+                    male_hints = ["mr", "lord", "sir", "boy", "man", "tom", "nick", "gatsby", "father", "son", "brother", "waiter", "butler"]
                     is_female = any(h in spk.lower() for h in fem_hints)
-                    if not is_female and isinstance(prose_text, str):
+                    is_male = any(h in spk.lower() for h in male_hints)
+                    if not is_female and not is_male and isinstance(prose_text, str):
                         clean_lower = clean_name.lower()
-                        if re.search(rf"\b(she|her)\b[^.]*\b{re.escape(clean_lower)}\b", prose_text, re.IGNORECASE) or \
-                           re.search(rf"\b{re.escape(clean_lower)}\b[^.]*\b(she|her)\b", prose_text, re.IGNORECASE):
+                        he_count = len(re.findall(rf"\b(he|him|his)\b", prose_text, re.IGNORECASE))
+                        she_count = len(re.findall(rf"\b(she|her)\b", prose_text, re.IGNORECASE))
+                        if she_count > he_count:
                             is_female = True
 
                     gender = "female" if is_female else "male"

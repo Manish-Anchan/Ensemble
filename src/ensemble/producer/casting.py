@@ -14,6 +14,9 @@ from ensemble.producer.catalog import (
     format_catalog_for_prompt,
 )
 
+_project_env = Path(__file__).resolve().parents[3] / ".env"
+if _project_env.exists():
+    load_dotenv(dotenv_path=_project_env)
 load_dotenv()
 
 
@@ -43,7 +46,7 @@ class CastingProducer:
 
     def _call_with_retry(self, messages: List[Dict[str, str]], max_retries: int = 3):
         """Executes LLM chat completion with backoff retry when rate limits or transient server spikes occur."""
-        is_gpt_oss = "gpt-oss" in self.model or "120b" in self.model or "20b" in self.model
+        is_gpt_oss = "gpt-oss" in self.model.lower()
         for attempt in range(max_retries + 1):
             try:
                 kwargs = {
@@ -68,6 +71,27 @@ class CastingProducer:
                 is_server_busy = status in (500, 502, 503, 504) or "high demand" in err_msg or "UNAVAILABLE" in err_msg
 
                 if (is_rate_limit or is_server_busy) and attempt < max_retries:
+                    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+                    if openrouter_key and is_rate_limit:
+                        fb_model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+                        fb_base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+                        print(f"   🔄 Groq rate limit reached in Casting. Routing to OpenRouter ({fb_model})...")
+                        try:
+                            fb_client = OpenAI(api_key=openrouter_key, base_url=fb_base_url)
+                            fb_kwargs = {
+                                "model": fb_model,
+                                "messages": messages,
+                                "temperature": 0.2,
+                                "response_format": {"type": "json_object"},
+                            }
+                            if "nemotron" in fb_model.lower():
+                                fb_kwargs["extra_body"] = {"reasoning": {"max_tokens": 0}}
+                            fb_resp = fb_client.chat.completions.create(**fb_kwargs)
+                            print(f"   ✅ OpenRouter casting fallback succeeded!")
+                            return fb_resp
+                        except Exception as fb_err:
+                            print(f"   ⚠️ OpenRouter fallback encountered: {fb_err}. Continuing retry...")
+
                     if is_server_busy:
                         wait_sec = 2.5 * (attempt + 1)
                         print(f"   ⏳ Provider experiencing temporary high demand ({status or 503}). Retrying in {wait_sec:.1f}s (attempt {attempt + 1}/{max_retries})...")

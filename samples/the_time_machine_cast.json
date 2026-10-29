@@ -1,0 +1,126 @@
+{
+  "book_title": "The Time Machine",
+  "characters": {
+    "narrator": {
+      "id": "narrator",
+      "name": "Narrator",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "narrator",
+      "personality_traits": [
+        "observant",
+        "measured"
+      ],
+      "aliases": [
+        "narrator"
+      ],
+      "voice_id": "bm_george",
+      "voice_rationale": "Warm British storyteller fits the classic third‑person narrative prose."
+    },
+    "char_time_traveller": {
+      "id": "char_time_traveller",
+      "name": "The Time Traveller",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "protagonist",
+      "personality_traits": [
+        "intelligent",
+        "earnest",
+        "enthusiastic"
+      ],
+      "aliases": [
+        "Time Traveller",
+        "he",
+        "the Traveller"
+      ],
+      "voice_id": "am_michael",
+      "voice_rationale": "Steady, warm voice matches his thoughtful, scholarly demeanor."
+    },
+    "char_filby": {
+      "id": "char_filby",
+      "name": "Filby",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "supporting",
+      "personality_traits": [
+        "argumentative",
+        "skeptical",
+        "witty"
+      ],
+      "aliases": [
+        "Filby"
+      ],
+      "voice_id": "am_fenrir",
+      "voice_rationale": "Dark, gravelly tone conveys his sharp, confrontational nature."
+    },
+    "char_psychologist": {
+      "id": "char_psychologist",
+      "name": "The Psychologist",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "supporting",
+      "personality_traits": [
+        "analytical",
+        "calm",
+        "inquisitive"
+      ],
+      "aliases": [
+        "Psychologist"
+      ],
+      "voice_id": "am_eric",
+      "voice_rationale": "Friendly, grounded voice suits a rational, probing character."
+    },
+    "char_medical_man": {
+      "id": "char_medical_man",
+      "name": "The Medical Man",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "supporting",
+      "personality_traits": [
+        "skeptical",
+        "practical",
+        "thoughtful"
+      ],
+      "aliases": [
+        "Medical Man"
+      ],
+      "voice_id": "am_adam",
+      "voice_rationale": "Deep, authoritative voice fits his serious, scientific perspective."
+    },
+    "char_provincial_mayor": {
+      "id": "char_provincial_mayor",
+      "name": "Provincial Mayor",
+      "gender": "male",
+      "age_group": "adult",
+      "role": "supporting",
+      "personality_traits": [
+        "thoughtful",
+        "introspective",
+        "authoritative"
+      ],
+      "aliases": [
+        "Provincial Mayor"
+      ],
+      "voice_id": "am_onyx",
+      "voice_rationale": "Very deep baritone gives weight to his position and reflective tone."
+    },
+    "char_very_young_man": {
+      "id": "char_very_young_man",
+      "name": "Very Young Man",
+      "gender": "male",
+      "age_group": "young",
+      "role": "supporting",
+      "personality_traits": [
+        "enthusiastic",
+        "curious",
+        "optimistic"
+      ],
+      "aliases": [
+        "Very Young Man"
+      ],
+      "voice_id": "am_liam",
+      "voice_rationale": "Youthful, clear voice captures his eager, hopeful demeanor."
+    }
+  },
+  "narrator_id": "narrator"
+}

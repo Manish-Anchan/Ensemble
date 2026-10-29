@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
@@ -46,11 +47,11 @@ class PDFBookExtractor:
         self,
         header_margin_pt: float = 45.0,
         footer_margin_pt: float = 45.0,
-        target_scene_words: int = 600,
+        target_scene_words: Optional[int] = None,
     ):
         self.header_margin = header_margin_pt
         self.footer_margin = footer_margin_pt
-        self.target_scene_words = target_scene_words
+        self.target_scene_words = target_scene_words if target_scene_words is not None else int(os.getenv("SCENE_TARGET_WORDS", "1000"))
 
     def _discover_recurring_headers(self, doc: pymupdf.Document, sample_pages: int = 30) -> Set[str]:
         """

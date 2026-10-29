@@ -1,5 +1,6 @@
+import os
 import re
-from typing import List
+from typing import List, Optional
 from ensemble.parser.models import SceneChunk
 
 
@@ -13,15 +14,21 @@ SCENE_BREAK_PATTERN = re.compile(
 def split_into_scenes(
     chapter_text: str,
     chapter_index: int,
-    target_words: int = 600,
-    min_words: int = 350,
-    max_words: int = 900
+    target_words: Optional[int] = None,
+    min_words: Optional[int] = None,
+    max_words: Optional[int] = None
 ) -> List[SceneChunk]:
     """
-    Slices clean chapter prose into cohesive scene chunks (~400-800 words).
+    Slices clean chapter prose into cohesive scene chunks (~800-1,400 words).
     Respects explicit scene break markers (* * *) and paragraph boundaries.
     Never splits across a dialogue or sentence mid-stream.
     """
+    if target_words is None:
+        target_words = int(os.getenv("SCENE_TARGET_WORDS", "1000"))
+    if min_words is None:
+        min_words = int(os.getenv("SCENE_MIN_WORDS", "600"))
+    if max_words is None:
+        max_words = int(os.getenv("SCENE_MAX_WORDS", "1400"))
     if not chapter_text.strip():
         return []
 
