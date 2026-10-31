@@ -278,7 +278,20 @@ export class StudioAudioEngine {
   async playVoicePreview(url: string): Promise<boolean> {
     this.ensureContext();
     this.stop(); // Stop ongoing stream preview
+
+    if (this.ctx && this.ctx.state === 'suspended') {
+      try {
+        await this.ctx.resume();
+      } catch (e) {
+        console.warn('AudioContext resume failed:', e);
+      }
+    }
+
     const resp = await fetch(url);
+    if (!resp.ok) {
+      throw new Error(`Failed to load voice sample: HTTP ${resp.status}`);
+    }
+
     const arrayBuffer = await resp.arrayBuffer();
     const audioBuffer = await this.ctx!.decodeAudioData(arrayBuffer);
 

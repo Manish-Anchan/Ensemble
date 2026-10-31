@@ -198,7 +198,8 @@ async def list_books():
             if f.suffix.lower() in (".pdf", ".epub"):
                 stem = f.stem
                 cast_path = find_cast_sheet(stem)
-                cached = _books_cache.get(f.name)
+                cache_key = f"{f.name}_{f.stat().st_mtime}"
+                cached = _books_cache.get(cache_key)
                 total_chapters = len(cached.chapters) if cached else None
                 total_words = cached.total_words if cached else None
                 author = cached.author if cached else None

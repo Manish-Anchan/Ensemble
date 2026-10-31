@@ -556,12 +556,14 @@ export default function App() {
         await fetchBooks();
         setSelectedBook(data.filename);
       } else {
-        throw new Error('Upload failed');
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.detail || 'Failed to upload manuscript.');
       }
-    } catch {
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to upload manuscript.';
       setToastMessage({
         title: 'Upload Error',
-        text: 'Failed to upload manuscript.',
+        text: errorMsg,
         type: 'error',
       });
     } finally {
@@ -687,7 +689,12 @@ export default function App() {
             <div
               key={b.filename}
               className={`item ${b.filename === selectedBook ? 'on' : ''}`}
-              onClick={() => setSelectedBook(b.filename)}
+              onClick={() => {
+                if (b.filename !== selectedBook) {
+                  stopDramaStream();
+                  setSelectedBook(b.filename);
+                }
+              }}
             >
               <svg viewBox="0 0 24 24">
                 <path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19a2 2 0 012-2h13" />
@@ -709,10 +716,12 @@ export default function App() {
               key={c.index}
               className={`chap ${c.index === selectedChapter ? 'on' : ''}`}
               onClick={() => {
-                setSelectedChapter(c.index);
-                followingRef.current = true;
-                setFollowing(true);
-                scrollToLine(activeLineIndex, true);
+                if (c.index !== selectedChapter) {
+                  stopDramaStream();
+                  setSelectedChapter(c.index);
+                  followingRef.current = true;
+                  setFollowing(true);
+                }
               }}
             >
               <em>{c.title}</em>
@@ -788,7 +797,7 @@ export default function App() {
           </div>
           <div className="who">
             <h2>{activeSpeaker.name}</h2>
-            <span className="role">{activeSpeaker.role.toUpperCase()}</span>
+            <span className="role">{(activeSpeaker.role || 'NARRATOR').toUpperCase()}</span>
           </div>
           <div className="status">
             <i />
@@ -895,10 +904,12 @@ export default function App() {
             <button
               className={activeScope === 'chapter' ? 'on' : ''}
               onClick={() => {
-                setActiveScope('chapter');
-                followingRef.current = true;
-                setFollowing(true);
-                scrollToLine(activeLineIndex, true);
+                if (activeScope !== 'chapter') {
+                  stopDramaStream();
+                  setActiveScope('chapter');
+                  followingRef.current = true;
+                  setFollowing(true);
+                }
               }}
             >
               Full chapter
@@ -906,10 +917,12 @@ export default function App() {
             <button
               className={activeScope === 'scene' ? 'on' : ''}
               onClick={() => {
-                setActiveScope('scene');
-                followingRef.current = true;
-                setFollowing(true);
-                scrollToLine(activeLineIndex, true);
+                if (activeScope !== 'scene') {
+                  stopDramaStream();
+                  setActiveScope('scene');
+                  followingRef.current = true;
+                  setFollowing(true);
+                }
               }}
             >
               1 scene
@@ -929,27 +942,14 @@ export default function App() {
                   : '24kHz'}
               </span>
             </div>
-            <div
-              className="track"
-              onClick={(e) => {
-                if (lines.length === 0) return;
-                const rect = e.currentTarget.getBoundingClientRect();
-                const ratio = (e.clientX - rect.left) / rect.width;
-                const targetIndex = Math.min(
-                  lines.length - 1,
-                  Math.max(0, Math.floor(ratio * lines.length))
-                );
-                handleLineClick(targetIndex);
-              }}
-              style={{ cursor: lines.length > 0 ? 'pointer' : 'default' }}
-            >
+            <div className="track" style={{ cursor: 'default' }}>
               <div
                 className="fill"
                 id="fl"
                 style={{
                   width:
                     lines.length > 0
-                      ? `${Math.min(100, Math.max(0, ((activeLineIndex + 1) / lines.length) * 100))}%`
+                      ? `${Math.min(100, Math.max(0, (activeLineIndex / lines.length) * 100))}%`
                       : '0%',
                 }}
               />
