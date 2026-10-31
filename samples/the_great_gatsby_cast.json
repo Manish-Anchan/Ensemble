@@ -21,7 +21,7 @@
         "char_nick_carraway"
       ],
       "voice_id": "am_michael",
-      "voice_rationale": "Steady, warm, and articulate voice suits the thoughtful, literary, and observant nature of the first-person narrator."
+      "voice_rationale": "Steady, warm, and articulate voice suits the thoughtful, observant, and somewhat detached perspective of the narrator."
     },
     "char_tom": {
       "id": "char_tom",
@@ -33,7 +33,7 @@
         "arrogant",
         "aggressive",
         "domineering",
-        "wealthy"
+        "physically imposing"
       ],
       "aliases": [
         "Tom",
@@ -41,7 +41,7 @@
         "Mr. Buchanan"
       ],
       "voice_id": "am_adam",
-      "voice_rationale": "Deep, authoritative, and slightly gruff tone captures Tom's physical imposing nature and his 'gruff husky tenor' speaking voice."
+      "voice_rationale": "Deep, authoritative, and slightly gruff tone matches Tom's description as a 'gruff husky tenor' with a 'cruel body' and supercilious manner."
     },
     "char_daisy": {
       "id": "char_daisy",
@@ -51,16 +51,16 @@
       "role": "supporting",
       "personality_traits": [
         "charming",
+        "vulnerable",
         "melancholic",
-        "elegant",
-        "coquettish"
+        "alluring"
       ],
       "aliases": [
         "Daisy",
         "Mrs. Buchanan"
       ],
       "voice_id": "af_nicole",
-      "voice_rationale": "Gentle, breathy, and thoughtful voice matches Daisy's 'low, thrilling voice' and her underlying sadness and allure."
+      "voice_rationale": "Gentle, breathy, and thoughtful voice captures Daisy's 'low, thrilling voice' and the underlying sadness and excitement in her demeanor."
     },
     "char_baker": {
       "id": "char_baker",
@@ -71,15 +71,15 @@
       "personality_traits": [
         "aloof",
         "discontented",
-        "slender",
-        "polite"
+        "polite",
+        "enigmatic"
       ],
       "aliases": [
         "Jordan",
         "Miss Baker"
       ],
       "voice_id": "af_kore",
-      "voice_rationale": "Quiet, introspective, and serious tone fits Jordan's 'wan, charming discontented face' and her detached, observant demeanor."
+      "voice_rationale": "Quiet, introspective, and serious tone fits Jordan's 'wan, charming discontented face' and her detached, almost imperceptible interactions."
     }
   },
   "narrator_id": "narrator"

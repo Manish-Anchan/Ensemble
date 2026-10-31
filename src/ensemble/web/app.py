@@ -126,6 +126,66 @@ async def serve_index():
 
 
 # ==============================================================================
+# REST API: Hardware & System Telemetry
+# ==============================================================================
+
+_hardware_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
+
+@app.get("/api/hardware")
+async def get_hardware_status():
+    """Returns GPU / CUDA hardware status, ONNX execution providers, and engine telemetry."""
+    now = time.time()
+    if _hardware_cache["data"] and (now - _hardware_cache["timestamp"] < 15.0):
+        return _hardware_cache["data"]
+
+    import shutil
+    import subprocess
+    import onnxruntime as ort
+
+    providers = ort.get_available_providers()
+    cuda_available = "CUDAExecutionProvider" in providers
+
+    gpu_info = {
+        "cuda_available": cuda_available,
+        "providers": providers,
+        "device_name": "CPU Fallback" if not cuda_available else "NVIDIA GPU",
+        "memory_total_mb": None,
+        "memory_free_mb": None,
+        "memory_used_mb": None,
+    }
+
+    if shutil.which("nvidia-smi"):
+        try:
+            res = await asyncio.to_thread(
+                subprocess.run,
+                ["nvidia-smi", "--query-gpu=name,memory.total,memory.free,memory.used", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                parts = [p.strip() for p in res.stdout.strip().split(",")]
+                if len(parts) >= 4:
+                    gpu_info["device_name"] = parts[0]
+                    gpu_info["memory_total_mb"] = int(float(parts[1]))
+                    gpu_info["memory_free_mb"] = int(float(parts[2]))
+                    gpu_info["memory_used_mb"] = int(float(parts[3]))
+        except Exception as e:
+            logger.debug(f"Failed to query nvidia-smi: {e}")
+
+    result = {
+        "status": "online",
+        "engine": "Kokoro-82M ONNX",
+        "sample_rate": 24000,
+        "gpu": gpu_info,
+        "active_threads": threading.active_count(),
+    }
+    _hardware_cache["data"] = result
+    _hardware_cache["timestamp"] = now
+    return result
+
+
+# ==============================================================================
 # REST API: Books & Library
 # ==============================================================================
 

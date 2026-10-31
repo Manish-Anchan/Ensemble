@@ -1,14 +1,16 @@
 export interface LineMetadata {
   line_index: number;
-  total_lines: number;
+  total_lines?: number;
+  scene_line_index?: number;
   speaker: string;
   character_name: string;
-  emotion: string;
-  voice_id: string;
-  speed: number;
+  emotion?: string;
+  voice_id?: string;
+  speed?: number;
+  pause_after_ms?: number;
+  duration_ms?: number;
   text: string;
   scene_index?: number;
-  act_type?: string;
   audio_base64: string;
 }
 
@@ -18,10 +20,18 @@ export interface QueueItem {
   metadata: LineMetadata;
 }
 
+export interface AudioFrequencyData {
+  energy: number;   // 0.0 - 1.0 overall volume
+  bass: number;     // 0.0 - 1.0 low-end
+  mid: number;      // 0.0 - 1.0 voice presence
+  treble: number;   // 0.0 - 1.0 air & brightness
+}
+
 export class StudioAudioEngine {
   ctx: AudioContext | null = null;
   analyser: AnalyserNode | null = null;
   gainNode: GainNode | null = null;
+
   isPlaying = false;
   isPaused = false;
   currentSource: AudioBufferSourceNode | null = null;
@@ -30,14 +40,14 @@ export class StudioAudioEngine {
   currentLineIndex = -1;
   playbackHistory: QueueItem[] = [];
 
-  // Jitter buffer settings
+  // Jitter buffer settings (Kokoro generation needs ~3s runway for seamless play)
   minBufferLines = 2;
-  minBufferSec = 4.0;
+  minBufferSec = 3.5;
   isBuffering = true;
   isStreamComplete = false;
 
-  // Real-time audio energy (0.0 to 1.0)
-  currentEnergy = 0.0;
+  // Real-time audio frequency telemetry
+  currentFreq: AudioFrequencyData = { energy: 0, bass: 0, mid: 0, treble: 0 };
 
   // Callbacks
   onLineStart?: (meta: LineMetadata, duration: number) => void;
@@ -45,12 +55,12 @@ export class StudioAudioEngine {
   onQueueEmpty?: () => void;
   onBufferProgress?: (count: number, target: number, totalSec: number) => void;
   onPlaybackStateChange?: (playing: boolean) => void;
-  onEnergyChange?: (energy: number) => void;
+  onFrequencyChange?: (freq: AudioFrequencyData) => void;
 
   private animationFrameId: number | null = null;
 
   constructor() {
-    this.startEnergyLoop();
+    this.startFrequencyLoop();
   }
 
   ensureContext() {
@@ -58,7 +68,7 @@ export class StudioAudioEngine {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
       this.analyser = this.ctx.createAnalyser();
-      this.analyser.fftSize = 64;
+      this.analyser.fftSize = 128;
       this.analyser.smoothingTimeConstant = 0.8;
 
       this.gainNode = this.ctx.createGain();
@@ -69,8 +79,10 @@ export class StudioAudioEngine {
     }
 
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch((e) => console.warn('AudioContext resume failed:', e));
     }
+
+    this.startFrequencyLoop();
   }
 
   setVolume(vol: number) {
@@ -92,6 +104,14 @@ export class StudioAudioEngine {
 
   async enqueueLine(lineData: LineMetadata) {
     try {
+      // Deduplicate: Don't enqueue if already queued or played
+      if (
+        this.queue.some((it) => it.lineIndex === lineData.line_index) ||
+        this.playbackHistory.some((it) => it.lineIndex === lineData.line_index)
+      ) {
+        return;
+      }
+
       const audioBuffer = await this.decodeBase64Wav(lineData.audio_base64);
       this.queue.push({
         lineIndex: lineData.line_index,
@@ -162,6 +182,14 @@ export class StudioAudioEngine {
     this.currentLineIndex = item.lineIndex;
     this.playbackHistory.push(item);
 
+    // Guard against corrupted/zero-length audio buffers
+    if (!item.audioBuffer || item.audioBuffer.duration <= 0.02) {
+      console.warn(`[AudioEngine] Skipping zero-duration buffer for line ${item.lineIndex}`);
+      setTimeout(() => this.playNext(), 50);
+      return;
+    }
+
+    this.ensureContext();
     const source = this.ctx!.createBufferSource();
     source.buffer = item.audioBuffer;
     source.connect(this.gainNode!);
@@ -249,6 +277,7 @@ export class StudioAudioEngine {
 
   async playVoicePreview(url: string): Promise<boolean> {
     this.ensureContext();
+    this.stop(); // Stop ongoing stream preview
     const resp = await fetch(url);
     const arrayBuffer = await resp.arrayBuffer();
     const audioBuffer = await this.ctx!.decodeAudioData(arrayBuffer);
@@ -256,35 +285,76 @@ export class StudioAudioEngine {
     const previewSource = this.ctx!.createBufferSource();
     previewSource.buffer = audioBuffer;
     previewSource.connect(this.gainNode!);
-    previewSource.start(0);
+
+    this.currentSource = previewSource;
+    this.isPlaying = true;
+    if (this.onPlaybackStateChange) this.onPlaybackStateChange(true);
 
     return new Promise((resolve) => {
-      previewSource.onended = () => resolve(true);
+      previewSource.onended = () => {
+        if (this.currentSource === previewSource) {
+          this.currentSource = null;
+          this.isPlaying = false;
+          if (this.onPlaybackStateChange) this.onPlaybackStateChange(false);
+        }
+        resolve(true);
+      };
+      previewSource.start(0);
     });
   }
 
-  private startEnergyLoop() {
+  startFrequencyLoop() {
+    if (this.animationFrameId !== null) return;
+
     const loop = () => {
       this.animationFrameId = requestAnimationFrame(loop);
 
       if (!this.analyser || !this.isPlaying || this.isPaused || !this.currentSource) {
-        this.currentEnergy = 0.0;
-        if (this.onEnergyChange) this.onEnergyChange(0.0);
+        this.currentFreq = { energy: 0, bass: 0, mid: 0, treble: 0 };
+        if (this.onFrequencyChange) this.onFrequencyChange(this.currentFreq);
         return;
       }
 
-      const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+      const binCount = this.analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(binCount);
       this.analyser.getByteFrequencyData(dataArray);
 
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        sum += dataArray[i];
-      }
-      const avg = sum / (dataArray.length * 255.0);
-      this.currentEnergy = Math.min(1.0, avg * 1.6);
+      // Split into frequency ranges
+      // binCount is typically 64 bins (0 to Nyquist)
+      const bassBins = Math.floor(binCount * 0.2);
+      const midBins = Math.floor(binCount * 0.6);
 
-      if (this.onEnergyChange) {
-        this.onEnergyChange(this.currentEnergy);
+      let sumTotal = 0;
+      let sumBass = 0;
+      let sumMid = 0;
+      let sumTreble = 0;
+
+      for (let i = 0; i < binCount; i++) {
+        const val = dataArray[i];
+        sumTotal += val;
+        if (i < bassBins) {
+          sumBass += val;
+        } else if (i < midBins) {
+          sumMid += val;
+        } else {
+          sumTreble += val;
+        }
+      }
+
+      const avgTotal = sumTotal / (binCount * 255.0);
+      const avgBass = sumBass / (Math.max(1, bassBins) * 255.0);
+      const avgMid = sumMid / (Math.max(1, midBins - bassBins) * 255.0);
+      const avgTreble = sumTreble / (Math.max(1, binCount - midBins) * 255.0);
+
+      this.currentFreq = {
+        energy: Math.min(1.0, avgTotal * 2.2),
+        bass: Math.min(1.0, avgBass * 2.0),
+        mid: Math.min(1.0, avgMid * 2.2),
+        treble: Math.min(1.0, avgTreble * 2.5),
+      };
+
+      if (this.onFrequencyChange) {
+        this.onFrequencyChange(this.currentFreq);
       }
     };
 
@@ -292,8 +362,9 @@ export class StudioAudioEngine {
   }
 
   destroy() {
-    if (this.animationFrameId) {
+    if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
     }
     this.stop();
   }

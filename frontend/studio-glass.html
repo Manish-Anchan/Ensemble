@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ensemble Studio</title>
+<link rel="stylesheet" href="studio-glass.css">
+</head>
+<body>
+<div class="bg"><i></i><i></i><i></i></div>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="mini-orb"></div><div><b>Ensemble Studio</b><small>Kokoro-82M · 24kHz</small></div></div>
+
+    <div>
+      <div class="label"><span>Ingest manuscript</span><span>PDF / EPUB</span></div>
+      <div class="drop">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5M7 9l5-5 5 5M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+        <b>Drop a novel here or browse</b><span>Scenes and characters are parsed automatically</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="label"><span>Manuscript library</span></div>
+      <div class="item on"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19a2 2 0 012-2h13"/></svg>Sample Manuscript<span class="fmt">PDF</span></div>
+      <div class="item"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19a2 2 0 012-2h13"/></svg>The Time Machine<span class="fmt">EPUB</span></div>
+    </div>
+
+    <div>
+      <div class="label"><span>Chapter index</span></div>
+      <div class="chap"><em>01 // Chapter 1</em><small>1 scene</small></div>
+    </div>
+
+    <div>
+      <div class="label"><span>Mastered outputs</span></div>
+      <div class="item"><svg viewBox="0 0 24 24"><path d="M9 18V6l10-2v12M9 18a3 3 0 11-6 0 3 3 0 016 0zm10-2a3 3 0 11-6 0 3 3 0 016 0z"/></svg><span style="font:400 12px var(--mono)">chapter_01.wav</span><span class="fmt">↓</span></div>
+    </div>
+  </aside>
+
+  <section class="main">
+    <header class="top">
+      <div class="crumb">Manuscript <b>Sample Manuscript</b> / <i>Chapter 1 · Scene 1</i></div>
+      <div class="chips">
+        <span class="chip"><span class="d"></span>RTX 2050 · CUDA active</span>
+        <span class="chip v"><span class="d"></span>Kokoro-82M · 24kHz</span>
+        <button class="btn">Casting Suite</button>
+      </div>
+    </header>
+
+    <div class="scroll">
+      <div class="stage" id="stage">
+        <div class="halo"></div>
+        <div class="orb-slot"><!-- PASTE YOUR EXISTING VOICE ORB COMPONENT HERE --></div>
+        <div class="who"><h2>Story Narrator</h2><span class="role">NARRATOR</span></div>
+        <div class="status"><i></i><span id="st">Idle</span></div>
+      </div>
+
+      <div class="play">
+        <div class="ph"><span>Theatrical screenplay</span><span>6 lines directed</span></div>
+        <div class="line on" style="--c:#b9a6ff"><div class="meta"><span class="who-l">Story Narrator</span><span class="tag">calm</span><span class="tag">slow</span></div><p>The harbor lights flickered as the last ferry pulled away from the dock.</p></div>
+        <div class="line" style="--c:#7fe6e3"><div class="meta"><span class="who-l">Mara</span><span class="tag">uneasy</span></div><p>“You said the tide would hold until morning.”</p></div>
+        <div class="line" style="--c:#f4a3dc"><div class="meta"><span class="who-l">Captain Voss</span><span class="tag">gruff</span><span class="tag">fast</span></div><p>“Tides lie, girl. Get below and keep the lantern dry.”</p></div>
+        <div class="line" style="--c:#b9a6ff"><div class="meta"><span class="who-l">Story Narrator</span><span class="tag">hushed</span></div><p>Somewhere beyond the breakwater, a bell began to ring on its own.</p></div>
+        <div class="line" style="--c:#7fe6e3"><div class="meta"><span class="who-l">Mara</span><span class="tag">whisper</span></div><p>“Do you hear that?”</p></div>
+        <div class="line" style="--c:#8fb8ff"><div class="meta"><span class="who-l">Old Tobias</span><span class="tag">warm</span></div><p>“Every sailor does, eventually.”</p></div>
+      </div>
+    </div>
+
+    <div class="dock">
+      <button class="play-btn" id="pb" aria-label="Play"><svg viewBox="0 0 24 24" id="ic"><path d="M7 4.5v15l13-7.5z"/></svg></button>
+      <button class="sq" aria-label="Stop" id="sb"><i></i></button>
+      <div class="seg"><button class="on">Full chapter</button><button>1 scene</button></div>
+      <div class="prog"><div class="t"><span id="rd">Ready</span><span>6 lines · 8.6s</span></div><div class="track"><div class="fill" id="fl"></div></div></div>
+      <div class="vol"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7"/></svg><div class="track"><div class="fill"></div></div></div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+  var stage=document.getElementById('stage'),pb=document.getElementById('pb'),ic=document.getElementById('ic'),
+      st=document.getElementById('st'),fl=document.getElementById('fl'),rd=document.getElementById('rd'),
+      lines=[].slice.call(document.querySelectorAll('.line')),p=0,timer=null;
+  var PLAY='M7 4.5v15l13-7.5z',PAUSE='M6 4h4v16H6zM14 4h4v16h-4z';
+  function setLine(i){lines.forEach(function(l,k){l.classList.toggle('on',k===i)});}
+  function tick(){p+=.8;if(p>=100){stop();return;}fl.style.width=p+'%';setLine(Math.min(lines.length-1,Math.floor(p/100*lines.length)));}
+  function start(){stage.classList.add('speaking');st.textContent='Speaking';rd.textContent='Playing';ic.firstElementChild.setAttribute('d',PAUSE);timer=setInterval(tick,70);}
+  function pause(){stage.classList.remove('speaking');st.textContent='Idle';rd.textContent='Paused';ic.firstElementChild.setAttribute('d',PLAY);clearInterval(timer);timer=null;}
+  function stop(){pause();p=0;fl.style.width='0%';rd.textContent='Ready';setLine(0);}
+  pb.onclick=function(){timer?pause():start();};
+  document.getElementById('sb').onclick=stop;
+  lines.forEach(function(l,i){l.onclick=function(){setLine(i);p=i/lines.length*100;fl.style.width=p+'%';};});
+})();
+</script>
+</body>
+</html>
