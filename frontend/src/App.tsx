@@ -139,10 +139,6 @@ export default function App() {
     role: 'NARRATOR',
   });
 
-  // Jitter Buffer Metrics
-  const [bufferedCount, setBufferedCount] = useState<number>(0);
-  const [bufferedSec, setBufferedSec] = useState<number>(0);
-
   // Auto-follow scroll state
   const [following, setFollowing] = useState<boolean>(true);
   const followingRef = useRef<boolean>(true);
@@ -296,8 +292,6 @@ export default function App() {
     };
 
     audioEngine.onBufferProgress = (count, _target, totalSec) => {
-      setBufferedCount(count);
-      setBufferedSec(totalSec);
       if (audioEngine.isBuffering) {
         setStreamingStatus(`Buffering (${count} lines · ${totalSec.toFixed(1)}s)...`);
       }
@@ -936,9 +930,9 @@ export default function App() {
               </span>
               <span>
                 {lines.length > 0
-                  ? `${lines.length} lines · ${bufferedSec.toFixed(1)}s`
-                  : bufferedCount > 0
-                  ? `${bufferedCount} lines · ${bufferedSec.toFixed(1)}s`
+                  ? activeLineIndex > 0
+                    ? `Line ${activeLineIndex} of ${lines.length} · 24kHz`
+                    : `${lines.length} lines · 24kHz`
                   : '24kHz'}
               </span>
             </div>
