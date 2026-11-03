@@ -6,6 +6,7 @@ from pydub import AudioSegment
 from ensemble.parser.models import Book, Chapter, SceneChunk
 from ensemble.producer.models import CastSheet, CharacterProfile
 from ensemble.director.models import Screenplay, ScreenplayLine
+from ensemble.director.director import SceneDirector
 from ensemble.drama.pipeline import DramaPipeline
 
 
@@ -56,7 +57,7 @@ def mock_cast():
 
 def test_produce_book_batch(monkeypatch, tmp_path: Path, mock_book, mock_cast):
     """Verifies that produce_book processes chapters, exports files, and generates a manifest."""
-    pipeline = DramaPipeline()
+    pipeline = DramaPipeline(director=SceneDirector(api_key="mock-key"))
 
     # Mock director to avoid external API calls
     def mock_direct(scene, cast_sheet=None, chapter_index=1, scene_index=1, **kwargs):
@@ -112,7 +113,7 @@ def test_produce_book_batch(monkeypatch, tmp_path: Path, mock_book, mock_cast):
 
 def test_produce_book_resume_skips_existing(monkeypatch, tmp_path: Path, mock_book, mock_cast):
     """Verifies that produce_book with resume=True skips already produced chapter files."""
-    pipeline = DramaPipeline()
+    pipeline = DramaPipeline(director=SceneDirector(api_key="mock-key"))
 
     def mock_direct(scene, cast_sheet=None, chapter_index=1, scene_index=1, **kwargs):
         return Screenplay(chapter_index=chapter_index, scene_index=scene_index, lines=[]), cast_sheet

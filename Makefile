@@ -64,6 +64,21 @@ web-build:
 web-dev:
 	cd frontend && npm run dev
 
+download-models:
+	@mkdir -p models
+	@if [ ! -f "models/kokoro-v1.0.onnx" ]; then \
+		echo "📥 Downloading kokoro-v1.0.onnx (325MB)..."; \
+		curl -L "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx" -o models/kokoro-v1.0.onnx; \
+	else \
+		echo "✓ models/kokoro-v1.0.onnx already exists."; \
+	fi
+	@if [ ! -f "models/voices-v1.0.bin" ]; then \
+		echo "📥 Downloading voices-v1.0.bin (28MB)..."; \
+		curl -L "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" -o models/voices-v1.0.bin; \
+	else \
+		echo "✓ models/voices-v1.0.bin already exists."; \
+	fi
+
 # ------------------------------------------------------------------------------
 # Live Streaming Playback (Jitter Buffer -> Speakers)
 # ------------------------------------------------------------------------------

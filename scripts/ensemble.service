@@ -1,0 +1,16 @@
+[Unit]
+Description=Ensemble Autonomous Audio Drama Studio
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Ensemble
+Environment="PATH=/home/ubuntu/.local/bin:/home/ubuntu/Ensemble/.venv/bin:/usr/local/cuda/bin:/usr/bin"
+EnvironmentFile=/home/ubuntu/Ensemble/.env
+ExecStart=/home/ubuntu/Ensemble/.venv/bin/python -m ensemble.web --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
