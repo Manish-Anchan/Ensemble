@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import json
 import time
 import base64
@@ -9,7 +10,18 @@ import traceback
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Response
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    UploadFile,
+    File,
+    HTTPException,
+    Response,
+    Header,
+    Query,
+    Depends,
+)
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -80,13 +92,60 @@ def get_director() -> SceneDirector:
     return _director
 
 
-def get_cached_book(filename: str) -> Book:
-    """Loads a book or fetches it from in-memory cache."""
-    file_path = SAMPLES_DIR / filename
-    if not file_path.exists():
+def sanitize_session_id(session_id: Optional[str]) -> Optional[str]:
+    """Sanitizes session ID to prevent path traversal, allowing alphanumeric and dashes/underscores only."""
+    if not session_id or not isinstance(session_id, str):
+        return None
+    cleaned = re.sub(r"[^a-zA-Z0-9_\-]", "", session_id.strip())
+    return cleaned[:64] if cleaned else None
+
+
+def get_session_id(
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
+    session_id: Optional[str] = Query(None),
+) -> Optional[str]:
+    """Extracts and sanitizes session ID from header or query parameter."""
+    return sanitize_session_id(x_session_id or session_id)
+
+
+def get_session_samples_dir(session_id: Optional[str] = None) -> Path:
+    """Returns the session-isolated samples directory, or global samples directory if none."""
+    clean_id = sanitize_session_id(session_id)
+    if clean_id:
+        p = SAMPLES_DIR / "sessions" / clean_id
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    return SAMPLES_DIR
+
+
+def get_session_outputs_dir(session_id: Optional[str] = None) -> Path:
+    """Returns the session-isolated outputs directory, or global outputs directory if none."""
+    clean_id = sanitize_session_id(session_id)
+    if clean_id:
+        p = OUTPUTS_DIR / "sessions" / clean_id
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    return OUTPUTS_DIR
+
+
+def get_cached_book(filename: str, session_id: Optional[str] = None) -> Book:
+    """Loads a book or fetches it from in-memory cache, checking session dir first then global."""
+    clean_sid = sanitize_session_id(session_id)
+    file_path: Optional[Path] = None
+    if clean_sid:
+        sess_path = get_session_samples_dir(clean_sid) / filename
+        if sess_path.exists():
+            file_path = sess_path
+
+    if file_path is None:
+        global_path = SAMPLES_DIR / filename
+        if global_path.exists():
+            file_path = global_path
+
+    if file_path is None or not file_path.exists():
         raise HTTPException(status_code=404, detail=f"Book file not found: {filename}")
 
-    cache_key = f"{filename}_{file_path.stat().st_mtime}"
+    cache_key = f"{str(file_path)}_{file_path.stat().st_mtime}"
     if cache_key not in _books_cache:
         # Load and parse book
         book = load_book(file_path)
@@ -95,13 +154,20 @@ def get_cached_book(filename: str) -> Book:
     return _books_cache[cache_key]
 
 
-def find_cast_sheet(book_stem: str) -> Optional[Path]:
-    """Finds cast sheet file for a given book stem in samples/ or outputs/."""
-    candidates = [
+def find_cast_sheet(book_stem: str, session_id: Optional[str] = None) -> Optional[Path]:
+    """Finds cast sheet file for a given book stem, prioritizing session-scoped cast sheets."""
+    clean_sid = sanitize_session_id(session_id)
+    candidates: List[Path] = []
+    if clean_sid:
+        candidates.extend([
+            get_session_samples_dir(clean_sid) / f"{book_stem}_cast.json",
+            get_session_outputs_dir(clean_sid) / book_stem / "cast_sheet.json",
+        ])
+    candidates.extend([
         SAMPLES_DIR / f"{book_stem}_cast.json",
         OUTPUTS_DIR / book_stem / "cast_sheet.json",
         SAMPLES_DIR / "cast_sheet.json",
-    ]
+    ])
     for p in candidates:
         if p.exists() and p.stat().st_size > 10:
             return p
@@ -190,15 +256,48 @@ async def get_hardware_status():
 # ==============================================================================
 
 @app.get("/api/books")
-async def list_books():
-    """Returns all available books in samples/ with metadata."""
+async def list_books(session_id: Optional[str] = Depends(get_session_id)):
+    """Returns all available books with metadata, merging global samples with session-isolated uploads."""
     books = []
+    seen_filenames = set()
+
+    # 1. Session-isolated books (if session_id provided)
+    clean_sid = sanitize_session_id(session_id)
+    if clean_sid:
+        sess_dir = get_session_samples_dir(clean_sid)
+        if sess_dir.exists():
+            for f in sorted(sess_dir.iterdir()):
+                if f.is_file() and f.suffix.lower() in (".pdf", ".epub"):
+                    seen_filenames.add(f.name)
+                    stem = f.stem
+                    cast_path = find_cast_sheet(stem, clean_sid)
+                    cache_key = f"{str(f)}_{f.stat().st_mtime}"
+                    cached = _books_cache.get(cache_key)
+                    total_chapters = len(cached.chapters) if cached else None
+                    total_words = cached.total_words if cached else None
+                    author = cached.author if cached else None
+                    title = cached.title if (cached and cached.title) else stem.replace("_", " ").title()
+
+                    books.append({
+                        "filename": f.name,
+                        "title": title,
+                        "author": author or "Uploaded Novel",
+                        "size_bytes": f.stat().st_size,
+                        "format": f.suffix.lower().lstrip("."),
+                        "has_cast_sheet": cast_path is not None,
+                        "cast_sheet_path": str(cast_path.relative_to(PROJECT_ROOT)) if cast_path else None,
+                        "total_chapters": total_chapters,
+                        "total_words": total_words,
+                        "is_session_book": True,
+                    })
+
+    # 2. Global shared sample books in samples/ (excluding subdirectories like 'sessions')
     if SAMPLES_DIR.exists():
         for f in sorted(SAMPLES_DIR.iterdir()):
-            if f.suffix.lower() in (".pdf", ".epub"):
+            if f.is_file() and f.name not in seen_filenames and f.suffix.lower() in (".pdf", ".epub"):
                 stem = f.stem
-                cast_path = find_cast_sheet(stem)
-                cache_key = f"{f.name}_{f.stat().st_mtime}"
+                cast_path = find_cast_sheet(stem, clean_sid)
+                cache_key = f"{str(f)}_{f.stat().st_mtime}"
                 cached = _books_cache.get(cache_key)
                 total_chapters = len(cached.chapters) if cached else None
                 total_words = cached.total_words if cached else None
@@ -215,39 +314,41 @@ async def list_books():
                     "cast_sheet_path": str(cast_path.relative_to(PROJECT_ROOT)) if cast_path else None,
                     "total_chapters": total_chapters,
                     "total_words": total_words,
+                    "is_session_book": False,
                 })
     return {"books": books}
 
 
 @app.post("/api/upload")
-async def upload_book(file: UploadFile = File(...)):
-    """Uploads a PDF or EPUB book to the samples directory and pre-caches it."""
+async def upload_book(file: UploadFile = File(...), session_id: Optional[str] = Depends(get_session_id)):
+    """Uploads a PDF or EPUB book to the session directory (or samples) and pre-caches it."""
     ext = Path(file.filename).suffix.lower()
     if ext not in (".pdf", ".epub"):
         raise HTTPException(status_code=400, detail="Only .pdf and .epub files are supported.")
 
-    dest = SAMPLES_DIR / file.filename
+    target_dir = get_session_samples_dir(session_id)
+    dest = target_dir / file.filename
     content = await file.read()
     with open(dest, "wb") as f:
         f.write(content)
 
     # Invalidate cache if re-uploaded
     for k in list(_books_cache.keys()):
-        if k.startswith(file.filename):
+        if str(dest) in k:
             del _books_cache[k]
 
     # Pre-parse book to cache and return instant metadata
     try:
-        book = get_cached_book(file.filename)
+        book = get_cached_book(file.filename, session_id)
         title = book.title or file.filename.replace("_", " ").title()
         total_chapters = len(book.chapters)
         total_words = book.total_words
-        author = book.author or "Classic Literature"
+        author = book.author or "Uploaded Novel"
     except Exception as e:
         title = Path(file.filename).stem.replace("_", " ").title()
         total_chapters = 0
         total_words = 0
-        author = "Classic Literature"
+        author = "Uploaded Novel"
 
     return {
         "filename": file.filename,
@@ -257,14 +358,15 @@ async def upload_book(file: UploadFile = File(...)):
         "total_words": total_words,
         "size_bytes": len(content),
         "status": "uploaded",
+        "session_id": session_id,
     }
 
 
 @app.get("/api/books/{filename}/chapters")
-async def get_book_chapters(filename: str):
+async def get_book_chapters(filename: str, session_id: Optional[str] = Depends(get_session_id)):
     """Returns the parsed chapters and scenes list for a book."""
     try:
-        book = get_cached_book(filename)
+        book = get_cached_book(filename, session_id)
         chapters = []
         for ch in book.chapters:
             chapters.append({
@@ -334,10 +436,10 @@ async def get_voice_sample(voice_id: str):
 
 
 @app.get("/api/books/{filename}/cast")
-async def get_cast(filename: str):
-    """Returns the cast sheet for a book."""
+async def get_cast(filename: str, session_id: Optional[str] = Depends(get_session_id)):
+    """Returns the cast sheet for a book, prioritizing session-scoped cast."""
     stem = Path(filename).stem
-    cast_path = find_cast_sheet(stem)
+    cast_path = find_cast_sheet(stem, session_id)
 
     if not cast_path:
         return {
@@ -363,10 +465,15 @@ class CastUpdateRequest(BaseModel):
 
 
 @app.post("/api/books/{filename}/cast")
-async def update_cast(filename: str, req: CastUpdateRequest):
-    """Updates and persists the cast sheet for a book."""
+async def update_cast(
+    filename: str,
+    req: CastUpdateRequest,
+    session_id: Optional[str] = Depends(get_session_id),
+):
+    """Updates and persists the cast sheet for a book in session or global directory."""
     stem = Path(filename).stem
-    target_path = SAMPLES_DIR / f"{stem}_cast.json"
+    target_dir = get_session_samples_dir(session_id)
+    target_path = target_dir / f"{stem}_cast.json"
 
     chars: Dict[str, CharacterProfile] = {}
     for cid, cdata in req.characters.items():
@@ -401,11 +508,43 @@ async def update_cast(filename: str, req: CastUpdateRequest):
 # ==============================================================================
 
 @app.get("/api/outputs")
-async def list_outputs():
-    """Lists all produced audio files in the outputs directory."""
+async def list_outputs(session_id: Optional[str] = Depends(get_session_id)):
+    """Lists produced audio files for the session (or global outputs), strictly excluding other sessions."""
     results = []
+    clean_sid = sanitize_session_id(session_id)
+
+    # 1. Session outputs (if session_id active)
+    if clean_sid:
+        sess_out_dir = get_session_outputs_dir(clean_sid)
+        if sess_out_dir.exists():
+            for root, _, files in os.walk(sess_out_dir):
+                for file in sorted(files):
+                    if file.lower().endswith((".wav", ".mp3", ".json")):
+                        file_path = Path(root) / file
+                        rel_path = file_path.relative_to(OUTPUTS_DIR)
+                        size = file_path.stat().st_size
+                        ext = file_path.suffix.lower().lstrip(".")
+
+                        dur_sec = 0.0
+                        if ext == "wav" and size > 44:
+                            dur_sec = round((size - 44) / 48000.0, 1)
+                        elif ext == "mp3" and size > 1000:
+                            dur_sec = round(size / 16000.0, 1)
+
+                        results.append({
+                            "name": file,
+                            "relative_path": str(rel_path),
+                            "format": ext,
+                            "size_bytes": size,
+                            "duration_sec": dur_sec,
+                            "modified_at": file_path.stat().st_mtime,
+                        })
+
+    # 2. Global outputs directly in outputs/ (excluding 'sessions/' entirely)
     if OUTPUTS_DIR.exists():
-        for root, _, files in os.walk(OUTPUTS_DIR):
+        for root, dirs, files in os.walk(OUTPUTS_DIR):
+            if "sessions" in dirs:
+                dirs.remove("sessions")
             for file in sorted(files):
                 if file.lower().endswith((".wav", ".mp3", ".json")):
                     file_path = Path(root) / file
@@ -431,11 +570,22 @@ async def list_outputs():
 
 
 @app.get("/api/outputs/file/{path:path}")
-async def get_output_file(path: str):
-    """Serves a produced audio file for playback or download."""
+async def get_output_file(path: str, session_id: Optional[str] = Depends(get_session_id)):
+    """Serves a produced audio file, enforcing session isolation for session files."""
     target = (OUTPUTS_DIR / path).resolve()
     if not target.is_relative_to(OUTPUTS_DIR.resolve()) or not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
+
+    # If the file is inside sessions/, ensure it belongs to the requesting session
+    clean_sid = sanitize_session_id(session_id)
+    try:
+        rel = target.relative_to((OUTPUTS_DIR / "sessions").resolve())
+        file_sid = rel.parts[0]
+        if not clean_sid or file_sid != clean_sid:
+            raise HTTPException(status_code=403, detail="Access denied to another session's file.")
+    except ValueError:
+        # File is not inside sessions/, so it's a shared global output
+        pass
 
     ext = target.suffix.lower()
     media_type = "audio/mpeg" if ext == ".mp3" else ("audio/wav" if ext == ".wav" else "application/json")
@@ -456,22 +606,7 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
     await websocket.accept()
 
     try:
-        book = get_cached_book(filename)
-        stem = Path(filename).stem
-        cast_path = find_cast_sheet(stem)
-
-        if cast_path:
-            cast_sheet = CastSheet.load_json(cast_path)
-        else:
-            # Fallback auto-cast on worker executor so event loop is not blocked
-            producer = CastingProducer()
-            loop = asyncio.get_running_loop()
-            cast_sheet = await loop.run_in_executor(_worker_executor, producer.cast_book, book)
-            saved_cast_path = SAMPLES_DIR / f"{stem}_cast.json"
-            try:
-                cast_sheet.save_json(saved_cast_path)
-            except Exception as e:
-                logger.warning(f"Failed to persist auto-cast sheet: {e}")
+        session_id = sanitize_session_id(websocket.query_params.get("session_id"))
 
         synth = get_synthesizer()
         director = get_director()
@@ -483,6 +618,26 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
             await websocket.send_json({"type": "error", "message": f"Unknown action: {action}"})
             await websocket.close()
             return
+
+        if not session_id:
+            session_id = sanitize_session_id(init_data.get("session_id"))
+
+        book = get_cached_book(filename, session_id)
+        stem = Path(filename).stem
+        cast_path = find_cast_sheet(stem, session_id)
+
+        if cast_path:
+            cast_sheet = CastSheet.load_json(cast_path)
+        else:
+            # Fallback auto-cast on worker executor so event loop is not blocked
+            producer = CastingProducer()
+            loop = asyncio.get_running_loop()
+            cast_sheet = await loop.run_in_executor(_worker_executor, producer.cast_book, book)
+            saved_cast_path = get_session_samples_dir(session_id) / f"{stem}_cast.json"
+            try:
+                cast_sheet.save_json(saved_cast_path)
+            except Exception as e:
+                logger.warning(f"Failed to persist auto-cast sheet: {e}")
 
         target_ch_idx = int(init_data.get("chapter") or init_data.get("chapter_index") or 1)
         max_scenes = int(init_data.get("scenes", 0))  # 0 means all scenes in chapter

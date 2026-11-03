@@ -17,6 +17,7 @@ models/
 *.mp3
 audio_cache/
 outputs/
+samples/sessions/
 
 # Local configuration
 .env

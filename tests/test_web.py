@@ -162,3 +162,118 @@ def test_websocket_streaming_flow(client, monkeypatch):
         # 6. Finished
         finished = websocket.receive_json()
         assert finished["type"] == "finished"
+
+
+def test_session_isolated_books(client, tmp_path):
+    """Verifies that uploaded books in one session are isolated from other sessions."""
+    import shutil
+    session_a = "usr_test_alpha"
+    session_b = "usr_test_beta"
+
+    # Copy a sample pdf as a mock upload for Session A
+    sess_a_dir = web_app.get_session_samples_dir(session_a)
+    test_pdf = sess_a_dir / "user_a_novel.pdf"
+    shutil.copy(web_app.SAMPLES_DIR / "the_great_gatsby.pdf", test_pdf)
+
+    try:
+        # Session A requests books: should see user_a_novel.pdf
+        resp_a = client.get("/api/books", headers={"X-Session-ID": session_a})
+        assert resp_a.status_code == 200
+        books_a = [b["filename"] for b in resp_a.json()["books"]]
+        assert "user_a_novel.pdf" in books_a
+
+        # Session B requests books: should NOT see user_a_novel.pdf
+        resp_b = client.get("/api/books", headers={"X-Session-ID": session_b})
+        assert resp_b.status_code == 200
+        books_b = [b["filename"] for b in resp_b.json()["books"]]
+        assert "user_a_novel.pdf" not in books_b
+        # But should still see global shared sample books
+        assert "the_great_gatsby.pdf" in books_b
+    finally:
+        shutil.rmtree(web_app.SAMPLES_DIR / "sessions" / session_a, ignore_errors=True)
+
+
+def test_session_isolated_cast(client):
+    """Verifies that cast sheet updates in Session A do not overwrite Session B or global cast."""
+    import shutil
+    session_a = "usr_test_alpha"
+    session_b = "usr_test_beta"
+
+    try:
+        # Session A customizes Tom Buchanan to bm_george
+        payload = {
+            "book_title": "The Great Gatsby",
+            "narrator_id": "narrator",
+            "characters": {
+                "narrator": {
+                    "id": "narrator",
+                    "name": "Nick",
+                    "voice_id": "am_michael",
+                    "gender": "male",
+                    "age_group": "adult",
+                    "role": "narrator",
+                    "personality_traits": [],
+                    "aliases": ["Nick"],
+                    "voice_rationale": "",
+                },
+                "char_tom": {
+                    "id": "char_tom",
+                    "name": "Tom Buchanan",
+                    "voice_id": "bm_george",  # Customized
+                    "gender": "male",
+                    "age_group": "adult",
+                    "role": "antagonist",
+                    "personality_traits": [],
+                    "aliases": ["Tom"],
+                    "voice_rationale": "",
+                }
+            }
+        }
+        save_resp = client.post(
+            "/api/books/the_great_gatsby.pdf/cast",
+            json=payload,
+            headers={"X-Session-ID": session_a}
+        )
+        assert save_resp.status_code == 200
+
+        # Session A should see Tom with bm_george
+        resp_a = client.get("/api/books/the_great_gatsby.pdf/cast", headers={"X-Session-ID": session_a})
+        assert resp_a.json()["characters"]["char_tom"]["voice_id"] == "bm_george"
+
+        # Session B should see the default Tom voice (am_adam), NOT Session A's bm_george
+        resp_b = client.get("/api/books/the_great_gatsby.pdf/cast", headers={"X-Session-ID": session_b})
+        assert resp_b.json()["characters"]["char_tom"]["voice_id"] != "bm_george"
+    finally:
+        shutil.rmtree(web_app.SAMPLES_DIR / "sessions" / session_a, ignore_errors=True)
+
+
+def test_session_isolated_outputs(client):
+    """Verifies that audio output files in Session A are not leaked to Session B."""
+    import shutil
+    session_a = "usr_test_alpha"
+    session_b = "usr_test_beta"
+
+    sess_a_out = web_app.get_session_outputs_dir(session_a)
+    test_out = sess_a_out / "Chapter_01_private.wav"
+    test_out.write_bytes(b"RIFF" + b"\x00" * 40 + b"WAVEfmt " + b"\x00" * 50)
+
+    try:
+        # Session A sees Chapter_01_private.wav
+        resp_a = client.get("/api/outputs", headers={"X-Session-ID": session_a})
+        names_a = [o["name"] for o in resp_a.json()["outputs"]]
+        assert "Chapter_01_private.wav" in names_a
+
+        # Session B does NOT see Chapter_01_private.wav
+        resp_b = client.get("/api/outputs", headers={"X-Session-ID": session_b})
+        names_b = [o["name"] for o in resp_b.json()["outputs"]]
+        assert "Chapter_01_private.wav" not in names_b
+
+        # Session B cannot download Session A's file (403 Forbidden)
+        dl_resp = client.get(
+            f"/api/outputs/file/sessions/{session_a}/Chapter_01_private.wav",
+            headers={"X-Session-ID": session_b}
+        )
+        assert dl_resp.status_code == 403
+    finally:
+        shutil.rmtree(web_app.OUTPUTS_DIR / "sessions" / session_a, ignore_errors=True)
+

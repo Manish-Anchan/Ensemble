@@ -15,6 +15,7 @@ interface BookItem {
   has_cast_sheet: boolean;
   total_chapters?: number;
   total_words?: number;
+  is_session_book?: boolean;
 }
 
 interface ChapterItem {
@@ -99,7 +100,45 @@ function getCharacterColor(name: string): string {
   return PASTEL_PALETTE[index];
 }
 
+function getOrCreateSessionId(): string {
+  try {
+    let sid = localStorage.getItem('ensemble_session_id');
+    if (!sid) {
+      sid = 'usr_' + Math.random().toString(36).substring(2, 8) + Date.now().toString(36).substring(4);
+      localStorage.setItem('ensemble_session_id', sid);
+    }
+    return sid;
+  } catch {
+    return 'usr_guest';
+  }
+}
+
 export default function App() {
+  // Session Isolation
+  const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId());
+
+  // Session-Aware Fetch Helper
+  const sessionFetch = useCallback(
+    (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers || {});
+      headers.set('X-Session-ID', sessionId);
+      return fetch(input, { ...init, headers });
+    },
+    [sessionId]
+  );
+
+  const resetSession = useCallback(() => {
+    const newSid = 'usr_' + Math.random().toString(36).substring(2, 8) + Date.now().toString(36).substring(4);
+    try {
+      localStorage.setItem('ensemble_session_id', newSid);
+    } catch {}
+    setSessionId(newSid);
+    setSelectedBook(null);
+    setLines([]);
+    setChapters([]);
+    setCastSheet(null);
+  }, []);
+
   // Navigation & Drawers
   const [castingDrawerOpen, setCastingDrawerOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -202,7 +241,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
   const fetchBooks = useCallback(async () => {
     try {
-      const res = await fetch('/api/books');
+      const res = await sessionFetch('/api/books');
       if (res.ok) {
         const data = await res.json();
         const bookList: BookItem[] = data.books || [];
@@ -214,11 +253,11 @@ export default function App() {
     } catch (e) {
       console.error('Failed to load books:', e);
     }
-  }, [selectedBook]);
+  }, [sessionFetch, selectedBook]);
 
   const fetchVoices = useCallback(async () => {
     try {
-      const res = await fetch('/api/voices');
+      const res = await sessionFetch('/api/voices');
       if (res.ok) {
         const data = await res.json();
         setVoices(data.voices || []);
@@ -226,11 +265,11 @@ export default function App() {
     } catch (e) {
       console.error('Failed to load voices:', e);
     }
-  }, []);
+  }, [sessionFetch]);
 
   const fetchHardware = useCallback(async () => {
     try {
-      const res = await fetch('/api/hardware');
+      const res = await sessionFetch('/api/hardware');
       if (res.ok) {
         const data = await res.json();
         setHardware(data);
@@ -238,11 +277,11 @@ export default function App() {
     } catch (e) {
       console.error('Failed to load hardware status:', e);
     }
-  }, []);
+  }, [sessionFetch]);
 
   const fetchOutputs = useCallback(async () => {
     try {
-      const res = await fetch('/api/outputs');
+      const res = await sessionFetch('/api/outputs');
       if (res.ok) {
         const data = await res.json();
         setOutputs(data.outputs || []);
@@ -250,7 +289,7 @@ export default function App() {
     } catch (e) {
       console.error('Failed to load outputs:', e);
     }
-  }, []);
+  }, [sessionFetch]);
 
   useEffect(() => {
     fetchBooks();
@@ -265,7 +304,7 @@ export default function App() {
   useEffect(() => {
     if (!selectedBook) return;
 
-    fetch(`/api/books/${selectedBook}/chapters`)
+    sessionFetch(`/api/books/${selectedBook}/chapters`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data && data.chapters) {
@@ -275,13 +314,13 @@ export default function App() {
       })
       .catch((err) => console.error('Failed to load chapters:', err));
 
-    fetch(`/api/books/${selectedBook}/cast`)
+    sessionFetch(`/api/books/${selectedBook}/cast`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data) setCastSheet(data);
       })
       .catch((err) => console.error('Failed to load cast:', err));
-  }, [selectedBook]);
+  }, [sessionFetch, selectedBook]);
 
   // ---------------------------------------------------------------------------
   // 3. Audio Engine Event Listeners
@@ -367,7 +406,7 @@ export default function App() {
     setStreamingStatus('Connecting to AI Director...');
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/stream/${selectedBook}`;
+    const wsUrl = `${protocol}//${window.location.host}/ws/stream/${selectedBook}?session_id=${encodeURIComponent(sessionId)}`;
 
     const ws = new WebSocket(wsUrl);
     socketRef.current = ws;
@@ -379,6 +418,7 @@ export default function App() {
           action: 'start',
           chapter: selectedChapter,
           scenes: activeScope === 'scene' ? 1 : 0,
+          session_id: sessionId,
         })
       );
     };
@@ -498,7 +538,7 @@ export default function App() {
     if (!selectedBook || !castSheet) return;
     setIsSavingCast(true);
     try {
-      const resp = await fetch(`/api/books/${selectedBook}/cast`, {
+      const resp = await sessionFetch(`/api/books/${selectedBook}/cast`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -536,7 +576,7 @@ export default function App() {
 
     setStreamingStatus(`Uploading ${file.name}...`);
     try {
-      const res = await fetch('/api/upload', {
+      const res = await sessionFetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
@@ -696,7 +736,13 @@ export default function App() {
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {b.title}
               </span>
-              <span className="fmt">{b.format.toUpperCase()}</span>
+              {b.is_session_book ? (
+                <span className="fmt" style={{ color: '#7fe6e3', borderColor: 'rgba(127, 230, 227, 0.35)' }}>
+                  PRIVATE
+                </span>
+              ) : (
+                <span className="fmt">{b.format.toUpperCase()}</span>
+              )}
             </div>
           ))}
         </div>
@@ -764,6 +810,19 @@ export default function App() {
             Manuscript <b>{currentBookObj?.title || selectedBook || 'No Book Selected'}</b> / <i>Chapter {selectedChapter}{currentChapterObj?.title ? ` · ${currentChapterObj.title}` : ''}</i>
           </div>
           <div className="chips">
+            <span
+              className="chip"
+              title="Private workspace: your uploaded books and generated audio are isolated to this session. Click to create a new workspace session."
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => {
+                if (window.confirm("Start a new private workspace session? Your current session's books remain saved, and a fresh workspace ID will be created.")) {
+                  resetSession();
+                }
+              }}
+            >
+              <span className="d" style={{ background: '#7fe6e3' }} />
+              Workspace {sessionId.substring(0, 10)} ↻
+            </span>
             <span className="chip">
               <span className="d" />
               {hardware?.gpu.device_name || 'NVIDIA GPU'} · {hardware?.gpu.cuda_available !== false ? 'CUDA active' : 'CPU'}
