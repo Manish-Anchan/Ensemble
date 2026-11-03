@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import type { AudioFrequencyData } from '../lib/audioEngine';
 import { SiriSheet } from '@/registry/orbe/siri-sheet/siri-sheet';
 import type { OrbState } from '@/registry/lib/orb-state';
@@ -24,6 +24,21 @@ export function VoiceOrb({
 
   const orbState: OrbState = state || (isPlaying ? 'speaking' : 'idle');
 
+  const colors = useMemo(() => {
+    switch (orbState) {
+      case 'thinking':
+        return { from: '#ffd180', to: '#c084fc' };
+      case 'connecting':
+        return { from: '#7fe6e3', to: '#818cf8' };
+      case 'speaking':
+        return { from: '#82f4ff', to: '#8e6cff' };
+      case 'error':
+        return { from: '#fb7185', to: '#f43f5e' };
+      default:
+        return { from: '#82f4ff', to: '#8e6cff' };
+    }
+  }, [orbState]);
+
   return (
     <div className="relative flex flex-col items-center justify-center p-6 rounded-2xl border border-white/[0.07] bg-[#000000] overflow-hidden select-none shadow-[0_8px_32px_rgba(0,0,0,0.8)]">
       {/* Siri Sheet Animated AI-Assistant Orb */}
@@ -31,9 +46,9 @@ export function VoiceOrb({
         <SiriSheet
           state={orbState}
           size={168}
-          speed={1}
-          colorFrom="#82f4ff"
-          colorTo="#8e6cff"
+          speed={orbState === 'thinking' ? 1.2 : 1}
+          colorFrom={colors.from}
+          colorTo={colors.to}
           levelRef={levelRef}
         />
       </div>

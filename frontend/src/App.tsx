@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { VoiceOrb } from './components/VoiceOrb';
+import { SiriPill } from './components/SiriPill';
+import type { OrbState } from '@/registry/lib/orb-state';
 import {
   StudioAudioEngine,
   type LineMetadata,
@@ -177,6 +179,23 @@ export default function App() {
     name: 'Story Narrator',
     role: 'NARRATOR',
   });
+
+  // Stage Presentation Mode ('auto' | 'orb' | 'pill')
+  const [stageViewMode, setStageViewMode] = useState<'auto' | 'orb' | 'pill'>('auto');
+
+  // Assistant Lifecycle State for Siri WebGL Shader
+  const isPreRollLoading = isStreaming && !isPlaying;
+
+  const orbState: OrbState = useMemo(() => {
+    if (isPlaying) return 'speaking';
+    if (isStreaming) {
+      if (streamingStatus.toLowerCase().includes('connecting')) return 'connecting';
+      return 'thinking';
+    }
+    return 'idle';
+  }, [isPlaying, isStreaming, streamingStatus]);
+
+  const showPill = stageViewMode === 'pill' || (stageViewMode === 'auto' && isPreRollLoading);
 
   // Auto-follow scroll state
   const [following, setFollowing] = useState<boolean>(true);
@@ -401,7 +420,7 @@ export default function App() {
     followingRef.current = true;
     setFollowing(true);
     setIsStreaming(true);
-    setIsPlaying(true);
+    setIsPlaying(false);
     setIsPaused(false);
     setStreamingStatus('Connecting to AI Director...');
 
@@ -434,6 +453,7 @@ export default function App() {
         } else if (msg.type === 'scene_start') {
           setStreamingStatus(`Directing Scene ${msg.current_scene_number}/${msg.total_scenes}...`);
         } else if (msg.type === 'screenplay_ready') {
+          setStreamingStatus('Synthesizing cast dialogue & narration...');
           setLines((prev) => {
             const existingIds = new Set(prev.map((l) => l.line_index));
             const newOnes = (msg.lines || []).filter((l: LineMetadata) => !existingIds.has(l.line_index));
@@ -838,24 +858,76 @@ export default function App() {
         </header>
 
         {/* Stage with Halo, Orb, Spotlight, and Status (flex: none) */}
-        <div className={`stage ${isPlaying ? 'speaking' : ''}`} id="stage">
+        <div className={`stage ${isPlaying ? 'speaking' : isPreRollLoading ? orbState : ''}`} id="stage">
           <div className="halo" />
-          <div className="orb-slot">
-            <VoiceOrb
-              speakerName={activeSpeaker.name}
-              role={activeSpeaker.role}
-              isPlaying={isPlaying || (isStreaming && !isPaused)}
-              freq={freq}
+
+          {/* Stage View Toggle: Auto / Orb / Pill */}
+          <div className="stage-toggle" title="Switch stage presentation mode">
+            <button
+              className={stageViewMode === 'auto' ? 'on' : ''}
+              onClick={() => setStageViewMode('auto')}
+            >
+              Auto
+            </button>
+            <button
+              className={stageViewMode === 'orb' ? 'on' : ''}
+              onClick={() => setStageViewMode('orb')}
+            >
+              Orb
+            </button>
+            <button
+              className={stageViewMode === 'pill' ? 'on' : ''}
+              onClick={() => setStageViewMode('pill')}
+            >
+              Pill
+            </button>
+          </div>
+
+          {showPill ? (
+            <SiriPill
+              state={orbState}
+              label={
+                isPreRollLoading
+                  ? orbState === 'connecting'
+                    ? 'Connecting to AI Director...'
+                    : streamingStatus || 'Synthesizing Audio Runway...'
+                  : isPlaying
+                  ? `${activeSpeaker.name} · Speaking`
+                  : isPaused
+                  ? 'Playback Paused'
+                  : 'Director Idle'
+              }
+              size={36}
             />
-          </div>
-          <div className="who">
-            <h2>{activeSpeaker.name}</h2>
-            <span className="role">{(activeSpeaker.role || 'NARRATOR').toUpperCase()}</span>
-          </div>
-          <div className="status">
-            <i />
-            <span id="st">{isPlaying ? 'Speaking' : isPaused ? 'Paused' : 'Idle'}</span>
-          </div>
+          ) : (
+            <>
+              <div className="orb-slot">
+                <VoiceOrb
+                  speakerName={activeSpeaker.name}
+                  role={activeSpeaker.role}
+                  isPlaying={isPlaying}
+                  freq={freq}
+                  state={orbState}
+                />
+              </div>
+              <div className="who">
+                <h2>{activeSpeaker.name}</h2>
+                <span className="role">{(activeSpeaker.role || 'NARRATOR').toUpperCase()}</span>
+              </div>
+              <div className="status">
+                <i />
+                <span id="st">
+                  {isPlaying
+                    ? 'Speaking'
+                    : isPaused
+                    ? 'Paused'
+                    : streamingStatus === 'Ready'
+                    ? 'Idle'
+                    : streamingStatus}
+                </span>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Fixed-Height Glass Play Card with Scrollable Lines (flex: 1 1 auto) */}
@@ -888,10 +960,25 @@ export default function App() {
             }}
           >
             {lines.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--dim)', font: '400 13px var(--mono)' }}>
-                No live screenplay streaming yet.<br />
-                Press <strong style={{ color: 'var(--text)' }}>Play</strong> on the dock below to direct Chapter {selectedChapter} in real-time.
-              </div>
+              isStreaming ? (
+                <div className="screenplay-shimmer">
+                  <div className="shimmer-header">
+                    <span className="live-dot" />
+                    <span>AI DIRECTOR DIRECTING CHAPTER {selectedChapter}...</span>
+                  </div>
+                  <div className="shimmer-bar" style={{ width: '85%' }} />
+                  <div className="shimmer-bar" style={{ width: '95%' }} />
+                  <div className="shimmer-bar" style={{ width: '70%' }} />
+                  <div style={{ textAlign: 'center', marginTop: '12px', color: 'var(--dim)', font: '400 12px var(--mono)' }}>
+                    {streamingStatus}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--dim)', font: '400 13px var(--mono)' }}>
+                  No live screenplay streaming yet.<br />
+                  Press <strong style={{ color: 'var(--text)' }}>Play</strong> on the dock below to direct Chapter {selectedChapter} in real-time.
+                </div>
+              )
             ) : (
               lines.map((line) => {
                 const isOn = line.line_index === activeLineIndex;
@@ -933,19 +1020,27 @@ export default function App() {
           <button
             className="play-btn"
             id="pb"
-            aria-label={isPlaying ? 'Pause' : 'Play'}
+            aria-label={isPlaying ? 'Pause' : isStreaming ? 'Stop Directing' : 'Play'}
             onClick={() => {
               if (isPlaying) {
                 pauseDramaStream();
               } else if (isPaused) {
                 resumeDramaStream();
+              } else if (isStreaming) {
+                stopDramaStream();
               } else {
                 startDramaStream();
               }
             }}
           >
             <svg viewBox="0 0 24 24" id="ic">
-              <path d={isPlaying ? 'M6 4h4v16H6zM14 4h4v16h-4z' : 'M7 4.5v15l13-7.5z'} />
+              {isPlaying ? (
+                <path d="M6 4h4v16H6zM14 4h4v16h-4z" />
+              ) : isStreaming ? (
+                <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+              ) : (
+                <path d="M7 4.5v15l13-7.5z" />
+              )}
             </svg>
           </button>
 
