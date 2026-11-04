@@ -134,18 +134,23 @@ def test_websocket_streaming_flow(client, monkeypatch):
         assert msg1["type"] == "started"
         assert msg1["chapter_index"] == 1
 
-        # 2. Scene start event
+        # 2. Chapter start event
+        msg_ch = websocket.receive_json()
+        assert msg_ch["type"] == "chapter_start"
+        assert msg_ch["chapter_index"] == 1
+
+        # 3. Scene start event
         msg2 = websocket.receive_json()
         assert msg2["type"] == "scene_start"
         assert msg2["scene_index"] == 1
 
-        # 3. Screenplay ready event
+        # 4. Screenplay ready event
         msg3 = websocket.receive_json()
         assert msg3["type"] == "screenplay_ready"
         assert msg3["total_lines"] == 2
         assert len(msg3["lines"]) == 2
 
-        # 4. Line audio events
+        # 5. Line audio events
         line1 = websocket.receive_json()
         assert line1["type"] == "line_audio"
         assert line1["line_index"] == 1
@@ -155,11 +160,16 @@ def test_websocket_streaming_flow(client, monkeypatch):
         assert line2["type"] == "line_audio"
         assert line2["line_index"] == 2
 
-        # 5. Scene completed
+        # 6. Scene completed
         scene_done = websocket.receive_json()
         assert scene_done["type"] == "scene_completed"
 
-        # 6. Finished
+        # 7. Chapter completed
+        ch_done = websocket.receive_json()
+        assert ch_done["type"] == "chapter_completed"
+        assert ch_done["chapter_index"] == 1
+
+        # 8. Finished
         finished = websocket.receive_json()
         assert finished["type"] == "finished"
 
@@ -276,4 +286,40 @@ def test_session_isolated_outputs(client):
         assert dl_resp.status_code == 403
     finally:
         shutil.rmtree(web_app.OUTPUTS_DIR / "sessions" / session_a, ignore_errors=True)
+
+
+def test_websocket_streaming_book_scope(client, monkeypatch):
+    """Verifies that scope='book' triggers multi-chapter streaming."""
+    mock_director = MagicMock()
+    mock_screenplay = Screenplay(
+        chapter_index=1,
+        scene_index=1,
+        lines=[
+            ScreenplayLine(speaker="narrator", text="The green light.", emotion="reflective", speed=1.0, pause_after_ms=300),
+        ]
+    )
+    mock_director.direct_scene.return_value = (mock_screenplay, None)
+    monkeypatch.setattr(web_app, "get_director", lambda: mock_director)
+
+    mock_synth = MagicMock()
+    def mock_stream(screenplay, cast_sheet):
+        for i, line in enumerate(screenplay.lines, 1):
+            yield i, len(screenplay.lines), line, "bm_george", AudioSegment.silent(duration=200)
+
+    mock_synth.stream_scene_lines = mock_stream
+    monkeypatch.setattr(web_app, "get_synthesizer", lambda: mock_synth)
+
+    with client.websocket_connect("/ws/stream/the_great_gatsby.pdf") as websocket:
+        websocket.send_json({"action": "start", "chapter": 1, "scope": "book", "all_chapters": True})
+
+        msg1 = websocket.receive_json()
+        assert msg1["type"] == "started"
+        assert msg1["scope"] == "book"
+        assert msg1["total_chapters"] > 1
+
+        # Check first chapter events
+        msg_ch = websocket.receive_json()
+        assert msg_ch["type"] == "chapter_start"
+        assert msg_ch["chapter_index"] == 1
+
 

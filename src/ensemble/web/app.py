@@ -640,28 +640,38 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
                 logger.warning(f"Failed to persist auto-cast sheet: {e}")
 
         target_ch_idx = int(init_data.get("chapter") or init_data.get("chapter_index") or 1)
+        scope = init_data.get("scope", "chapter")
+        all_chapters = bool(init_data.get("all_chapters", scope == "book"))
         max_scenes = int(init_data.get("scenes", 0))  # 0 means all scenes in chapter
 
-        # Locate target chapter
-        target_chapter = next((ch for ch in book.chapters if ch.index == target_ch_idx), None)
-        if not target_chapter:
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Chapter {target_ch_idx} not found in {book.title}"
-            })
-            await websocket.close()
-            return
+        if all_chapters or scope == "book":
+            # Stream all chapters sequentially starting from target_ch_idx (or all if target is 1)
+            chapters_to_stream = [ch for ch in book.chapters if ch.index >= target_ch_idx]
+            if not chapters_to_stream:
+                chapters_to_stream = book.chapters
+        else:
+            # Locate target chapter
+            target_chapter = next((ch for ch in book.chapters if ch.index == target_ch_idx), None)
+            if not target_chapter:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Chapter {target_ch_idx} not found in {book.title}"
+                })
+                await websocket.close()
+                return
+            chapters_to_stream = [target_chapter]
 
-        scenes_to_stream = target_chapter.scenes
-        if max_scenes > 0:
-            scenes_to_stream = target_chapter.scenes[:max_scenes]
+        initial_chapter = chapters_to_stream[0]
+        total_scenes_count = sum(len(ch.scenes) for ch in chapters_to_stream)
 
         await websocket.send_json({
             "type": "started",
             "book_title": book.title,
-            "chapter_index": target_chapter.index,
-            "chapter_title": target_chapter.title,
-            "total_scenes": len(scenes_to_stream),
+            "chapter_index": initial_chapter.index,
+            "chapter_title": initial_chapter.title,
+            "scope": "book" if len(chapters_to_stream) > 1 else "chapter",
+            "total_chapters": len(chapters_to_stream),
+            "total_scenes": total_scenes_count,
         })
 
         loop = asyncio.get_running_loop()
@@ -688,124 +698,150 @@ async def websocket_drama_stream(websocket: WebSocket, filename: str):
             last_scene_text: Optional[str] = None
             last_active_speakers: List[str] = []
             try:
-                for s_idx, scene in enumerate(scenes_to_stream, 1):
+                for ch_num, current_ch in enumerate(chapters_to_stream, 1):
                     if stop_event.is_set():
                         break
 
                     push_item({
-                        "type": "scene_start",
-                        "scene_index": scene.scene_index,
-                        "current_scene_number": s_idx,
-                        "total_scenes": len(scenes_to_stream),
-                        "word_count": scene.word_count,
+                        "type": "chapter_start",
+                        "chapter_index": current_ch.index,
+                        "chapter_title": current_ch.title,
+                        "current_chapter_number": ch_num,
+                        "total_chapters": len(chapters_to_stream),
                     })
 
-                    # Build rolling previous scene context for pronoun and character continuity
-                    previous_scene_context = None
-                    if last_scene_text:
-                        words = last_scene_text.strip().split()
-                        trailing_words = " ".join(words[-200:]) if len(words) > 200 else last_scene_text.strip()
-                        speakers_hint = f"Characters active in previous scene: {', '.join(last_active_speakers)}\n" if last_active_speakers else ""
-                        previous_scene_context = f"{speakers_hint}Ending of previous scene:\n\"{trailing_words}\""
-                    elif scene.scene_index > 1:
-                        prev_scene_obj = next((s for s in target_chapter.scenes if s.scene_index == scene.scene_index - 1), None)
-                        if prev_scene_obj and prev_scene_obj.text:
-                            words = prev_scene_obj.text.strip().split()
-                            trailing_words = " ".join(words[-200:]) if len(words) > 200 else prev_scene_obj.text.strip()
-                            previous_scene_context = f"Ending of preceding scene:\n\"{trailing_words}\""
+                    scenes_to_stream = current_ch.scenes
+                    if max_scenes > 0 and len(chapters_to_stream) == 1:
+                        scenes_to_stream = current_ch.scenes[:max_scenes]
 
-                    # Direct screenplay (LLM call off the event loop)
-                    t0 = time.time()
-                    screenplay, updated_cast = director.direct_scene(
-                        scene=scene,
-                        cast_sheet=cast_sheet,
-                        chapter_index=scene.chapter_index,
-                        scene_index=scene.scene_index,
-                        previous_scene_context=previous_scene_context,
-                    )
-                    cast_sheet = updated_cast or cast_sheet
-                    direct_dur = time.time() - t0
-
-                    last_scene_text = scene.text
-                    last_active_speakers = [
-                        cast_sheet.characters[spk].name for spk in screenplay.speaker_counts.keys()
-                        if spk in cast_sheet.characters and spk != "narrator"
-                    ]
-
-                    if stop_event.is_set():
-                        break
-
-                    lines_meta = []
-                    scene_start_global_idx = global_line_counter
-                    for s_line_idx, line in enumerate(screenplay.lines, 1):
-                        global_line_counter += 1
-                        char = cast_sheet.get_character_for_speaker(line.speaker)
-                        lines_meta.append({
-                            "line_index": global_line_counter,
-                            "scene_line_index": s_line_idx,
-                            "scene_index": scene.scene_index,
-                            "speaker": line.speaker,
-                            "character_name": char.name if char else line.speaker.replace("char_", "").replace("_", " ").title(),
-                            "text": line.text,
-                            "emotion": line.emotion,
-                            "speed": line.speed,
-                            "pause_after_ms": line.pause_after_ms,
-                            "voice_id": cast_sheet.get_voice_for_speaker(line.speaker),
-                        })
-
-                    push_item({
-                        "type": "screenplay_ready",
-                        "scene_index": scene.scene_index,
-                        "scene_number": s_idx,
-                        "total_lines": len(screenplay.lines),
-                        "lines": lines_meta,
-                        "direct_duration_sec": round(direct_dur, 2),
-                    })
-
-                    # Stream audio lines (ONNX inference off the event loop)
-                    audio_line_counter = scene_start_global_idx
-                    for line_idx, total_lines, line, voice_id, line_audio in synth.stream_scene_lines(screenplay, cast_sheet):
+                    for s_idx, scene in enumerate(scenes_to_stream, 1):
                         if stop_event.is_set():
                             break
 
-                        audio_line_counter += 1
-                        buf = io.BytesIO()
-                        line_audio.export(buf, format="wav")
-                        wav_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-
-                        char = cast_sheet.get_character_for_speaker(line.speaker)
-                        char_name = char.name if char else line.speaker.replace("char_", "").replace("_", " ").title()
-
-                        payload = {
-                            "type": "line_audio",
+                        push_item({
+                            "type": "scene_start",
+                            "chapter_index": current_ch.index,
                             "scene_index": scene.scene_index,
-                            "line_index": audio_line_counter,
-                            "scene_line_index": line_idx,
-                            "total_lines": total_lines,
-                            "speaker": line.speaker,
-                            "character_name": char_name,
-                            "voice_id": voice_id,
-                            "emotion": line.emotion,
-                            "speed": line.speed,
-                            "pause_after_ms": line.pause_after_ms,
-                            "duration_ms": len(line_audio),
-                            "text": line.text,
-                            "audio_base64": wav_b64,
-                        }
-                        push_item(payload)
+                            "current_scene_number": s_idx,
+                            "total_scenes": len(scenes_to_stream),
+                            "word_count": scene.word_count,
+                        })
 
-                    if stop_event.is_set():
-                        break
+                        # Build rolling previous scene context for pronoun and character continuity
+                        previous_scene_context = None
+                        if last_scene_text:
+                            words = last_scene_text.strip().split()
+                            trailing_words = " ".join(words[-200:]) if len(words) > 200 else last_scene_text.strip()
+                            speakers_hint = f"Characters active in previous scene: {', '.join(last_active_speakers)}\n" if last_active_speakers else ""
+                            previous_scene_context = f"{speakers_hint}Ending of previous scene:\n\"{trailing_words}\""
+                        elif scene.scene_index > 1:
+                            prev_scene_obj = next((s for s in current_ch.scenes if s.scene_index == scene.scene_index - 1), None)
+                            if prev_scene_obj and prev_scene_obj.text:
+                                words = prev_scene_obj.text.strip().split()
+                                trailing_words = " ".join(words[-200:]) if len(words) > 200 else prev_scene_obj.text.strip()
+                                previous_scene_context = f"Ending of preceding scene:\n\"{trailing_words}\""
+
+                        # Direct screenplay (LLM call off the event loop)
+                        t0 = time.time()
+                        screenplay, updated_cast = director.direct_scene(
+                            scene=scene,
+                            cast_sheet=cast_sheet,
+                            chapter_index=scene.chapter_index,
+                            scene_index=scene.scene_index,
+                            previous_scene_context=previous_scene_context,
+                        )
+                        cast_sheet = updated_cast or cast_sheet
+                        direct_dur = time.time() - t0
+
+                        last_scene_text = scene.text
+                        last_active_speakers = [
+                            cast_sheet.characters[spk].name for spk in screenplay.speaker_counts.keys()
+                            if spk in cast_sheet.characters and spk != "narrator"
+                        ]
+
+                        if stop_event.is_set():
+                            break
+
+                        lines_meta = []
+                        scene_start_global_idx = global_line_counter
+                        for s_line_idx, line in enumerate(screenplay.lines, 1):
+                            global_line_counter += 1
+                            char = cast_sheet.get_character_for_speaker(line.speaker)
+                            lines_meta.append({
+                                "line_index": global_line_counter,
+                                "scene_line_index": s_line_idx,
+                                "scene_index": scene.scene_index,
+                                "speaker": line.speaker,
+                                "character_name": char.name if char else line.speaker.replace("char_", "").replace("_", " ").title(),
+                                "text": line.text,
+                                "emotion": line.emotion,
+                                "speed": line.speed,
+                                "pause_after_ms": line.pause_after_ms,
+                                "voice_id": cast_sheet.get_voice_for_speaker(line.speaker),
+                            })
+
+                        push_item({
+                            "type": "screenplay_ready",
+                            "chapter_index": current_ch.index,
+                            "scene_index": scene.scene_index,
+                            "scene_number": s_idx,
+                            "total_lines": len(screenplay.lines),
+                            "lines": lines_meta,
+                            "direct_duration_sec": round(direct_dur, 2),
+                        })
+
+                        # Stream audio lines (ONNX inference off the event loop)
+                        audio_line_counter = scene_start_global_idx
+                        for line_idx, total_lines, line, voice_id, line_audio in synth.stream_scene_lines(screenplay, cast_sheet):
+                            if stop_event.is_set():
+                                break
+
+                            audio_line_counter += 1
+                            buf = io.BytesIO()
+                            line_audio.export(buf, format="wav")
+                            wav_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+                            char = cast_sheet.get_character_for_speaker(line.speaker)
+                            char_name = char.name if char else line.speaker.replace("char_", "").replace("_", " ").title()
+
+                            payload = {
+                                "type": "line_audio",
+                                "chapter_index": current_ch.index,
+                                "scene_index": scene.scene_index,
+                                "line_index": audio_line_counter,
+                                "scene_line_index": line_idx,
+                                "total_lines": total_lines,
+                                "speaker": line.speaker,
+                                "character_name": char_name,
+                                "voice_id": voice_id,
+                                "emotion": line.emotion,
+                                "speed": line.speed,
+                                "pause_after_ms": line.pause_after_ms,
+                                "duration_ms": len(line_audio),
+                                "text": line.text,
+                                "audio_base64": wav_b64,
+                            }
+                            push_item(payload)
+
+                        if stop_event.is_set():
+                            break
+
+                        push_item({
+                            "type": "scene_completed",
+                            "chapter_index": current_ch.index,
+                            "scene_index": scene.scene_index,
+                        })
 
                     push_item({
-                        "type": "scene_completed",
-                        "scene_index": scene.scene_index,
+                        "type": "chapter_completed",
+                        "chapter_index": current_ch.index,
+                        "chapter_title": current_ch.title,
                     })
 
                 if not stop_event.is_set():
                     push_item({
                         "type": "finished",
-                        "message": "All scenes streamed successfully.",
+                        "message": "Entire book directed and streamed successfully." if len(chapters_to_stream) > 1 else "Chapter complete.",
                     })
 
             except Exception as exc:

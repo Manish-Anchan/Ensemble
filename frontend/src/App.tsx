@@ -115,6 +115,21 @@ function getOrCreateSessionId(): string {
   }
 }
 
+function formatChapterBreadcrumb(index: number, title?: string): string {
+  if (!title) return `Chapter ${index}`;
+  const cleanTitle = title.trim();
+  const lower = cleanTitle.toLowerCase();
+  const chPrefix = `chapter ${index}`.toLowerCase();
+  if (lower === chPrefix || lower === 'chapter' || lower === `${index}`) {
+    return `Chapter ${index}`;
+  }
+  if (lower.startsWith(chPrefix)) {
+    const rest = cleanTitle.slice(chPrefix.length).replace(/^[:\s·—–-]+/, '').trim();
+    return rest ? `Chapter ${index} · ${rest}` : `Chapter ${index}`;
+  }
+  return `Chapter ${index} · ${cleanTitle}`;
+}
+
 export default function App() {
   // Session Isolation
   const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId());
@@ -150,7 +165,7 @@ export default function App() {
   const [selectedBook, setSelectedBook] = useState<string | null>(null);
   const [chapters, setChapters] = useState<ChapterItem[]>([]);
   const [selectedChapter, setSelectedChapter] = useState<number>(1);
-  const [activeScope, setActiveScope] = useState<'chapter' | 'scene'>('chapter');
+  const [activeScope, setActiveScope] = useState<'book' | 'chapter'>('book');
 
   // Casting & Voices State
   const [voices, setVoices] = useState<VoiceDescriptor[]>([]);
@@ -431,12 +446,18 @@ export default function App() {
     socketRef.current = ws;
 
     ws.onopen = () => {
-      setStreamingStatus('AI Director analyzing screenplay...');
+      setStreamingStatus(
+        activeScope === 'book'
+          ? `AI Director directing entire book...`
+          : `AI Director analyzing Chapter ${selectedChapter}...`
+      );
       ws.send(
         JSON.stringify({
           action: 'start',
+          scope: activeScope,
           chapter: selectedChapter,
-          scenes: activeScope === 'scene' ? 1 : 0,
+          all_chapters: activeScope === 'book',
+          scenes: 0,
           session_id: sessionId,
         })
       );
@@ -449,7 +470,18 @@ export default function App() {
         const msg = JSON.parse(evt.data);
 
         if (msg.type === 'started') {
-          setStreamingStatus(`Directing Chapter ${msg.chapter_index}...`);
+          setStreamingStatus(
+            msg.scope === 'book'
+              ? `Directing Entire Book · Chapter ${msg.chapter_index}...`
+              : `Directing Chapter ${msg.chapter_index}...`
+          );
+        } else if (msg.type === 'chapter_start') {
+          setSelectedChapter(msg.chapter_index);
+          setStreamingStatus(
+            msg.total_chapters > 1
+              ? `Directing Chapter ${msg.chapter_index} of ${msg.total_chapters}...`
+              : `Directing Chapter ${msg.chapter_index}...`
+          );
         } else if (msg.type === 'scene_start') {
           setStreamingStatus(`Directing Scene ${msg.current_scene_number}/${msg.total_scenes}...`);
         } else if (msg.type === 'screenplay_ready') {
@@ -827,7 +859,7 @@ export default function App() {
         {/* Top Bar (flex: none) */}
         <header className="top">
           <div className="crumb">
-            Manuscript <b>{currentBookObj?.title || selectedBook || 'No Book Selected'}</b> / <i>Chapter {selectedChapter}{currentChapterObj?.title ? ` · ${currentChapterObj.title}` : ''}</i>
+            Manuscript <b>{currentBookObj?.title || selectedBook || 'No Book Selected'}</b> / <i>{formatChapterBreadcrumb(selectedChapter, currentChapterObj?.title)}</i>
           </div>
           <div className="chips">
             <span
@@ -964,7 +996,11 @@ export default function App() {
                 <div className="screenplay-shimmer">
                   <div className="shimmer-header">
                     <span className="live-dot" />
-                    <span>AI DIRECTOR DIRECTING CHAPTER {selectedChapter}...</span>
+                    <span>
+                      {activeScope === 'book'
+                        ? 'AI DIRECTOR DIRECTING ENTIRE BOOK...'
+                        : `AI DIRECTOR DIRECTING CHAPTER ${selectedChapter}...`}
+                    </span>
                   </div>
                   <div className="shimmer-bar" style={{ width: '85%' }} />
                   <div className="shimmer-bar" style={{ width: '95%' }} />
@@ -976,7 +1012,7 @@ export default function App() {
               ) : (
                 <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--dim)', font: '400 13px var(--mono)' }}>
                   No live screenplay streaming yet.<br />
-                  Press <strong style={{ color: 'var(--text)' }}>Play</strong> on the dock below to direct Chapter {selectedChapter} in real-time.
+                  Press <strong style={{ color: 'var(--text)' }}>Play</strong> on the dock below to direct {activeScope === 'book' ? 'the entire book' : `Chapter ${selectedChapter}`} in real-time.
                 </div>
               )
             ) : (
@@ -1050,6 +1086,19 @@ export default function App() {
 
           <div className="seg">
             <button
+              className={activeScope === 'book' ? 'on' : ''}
+              onClick={() => {
+                if (activeScope !== 'book') {
+                  stopDramaStream();
+                  setActiveScope('book');
+                  followingRef.current = true;
+                  setFollowing(true);
+                }
+              }}
+            >
+              Book
+            </button>
+            <button
               className={activeScope === 'chapter' ? 'on' : ''}
               onClick={() => {
                 if (activeScope !== 'chapter') {
@@ -1060,20 +1109,7 @@ export default function App() {
                 }
               }}
             >
-              Full chapter
-            </button>
-            <button
-              className={activeScope === 'scene' ? 'on' : ''}
-              onClick={() => {
-                if (activeScope !== 'scene') {
-                  stopDramaStream();
-                  setActiveScope('scene');
-                  followingRef.current = true;
-                  setFollowing(true);
-                }
-              }}
-            >
-              1 scene
+              Chapter
             </button>
           </div>
 
