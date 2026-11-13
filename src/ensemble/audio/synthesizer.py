@@ -88,7 +88,10 @@ class DramaSynthesizer:
             available = ort.get_available_providers()
             providers = []
             if "CUDAExecutionProvider" in available:
-                providers.append("CUDAExecutionProvider")
+                cuda_opts = {
+                    "cudnn_conv_algo_search": "DEFAULT",
+                }
+                providers.append(("CUDAExecutionProvider", cuda_opts))
             providers.append("CPUExecutionProvider")
 
             try:
